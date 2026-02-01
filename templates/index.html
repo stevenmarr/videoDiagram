@@ -59,8 +59,27 @@
 
     <script>
         // Setup LiteGraph
+        var canvasEl = document.getElementById('mycanvas');
+        var dpr = window.devicePixelRatio || 1;
+        var cssWidth = window.innerWidth;
+        var cssHeight = window.innerHeight * 0.8;
+        canvasEl.width = cssWidth * dpr;
+        canvasEl.height = cssHeight * dpr;
+        canvasEl.style.width = cssWidth + 'px';
+        canvasEl.style.height = cssHeight + 'px';
+
         var graph = new LGraph();
+        graph.config = { links_ontop: true };
         var canvas = new LGraphCanvas("#mycanvas", graph);
+
+        // Scale contexts
+        canvas.ctx.scale(dpr, dpr);
+        canvas.bgctx.scale(dpr, dpr);
+
+        // Set bgcanvas size
+        canvas.bgcanvas.width = canvasEl.width;
+        canvas.bgcanvas.height = canvasEl.height;
+
         graph.start();
 
         // Wizard Functions
@@ -82,7 +101,7 @@
             item.className = 'dynamic-item';
             item.innerHTML = `
                 <input type="text" placeholder="Port Name" class="portName" required>
-                <input type="text" placeholder="Type (e.g., video)" class="portType" required>
+                <input type="text" placeholder="Type (e.g., video or any)" class="portType" required>
             `;
             list.appendChild(item);
         }
@@ -99,7 +118,10 @@
             inputItems.forEach(item => {
                 var portName = item.querySelector('.portName').value;
                 var portType = item.querySelector('.portType').value;
-                if (portName && portType) inputs.push([portName, portType]);
+                if (portName && portType) {
+                    if (portType === 'any') portType = -1;
+                    inputs.push([portName, portType]);
+                }
             });
 
             // Collect outputs
@@ -108,7 +130,10 @@
             outputItems.forEach(item => {
                 var portName = item.querySelector('.portName').value;
                 var portType = item.querySelector('.portType').value;
-                if (portName && portType) outputs.push([portName, portType]);
+                if (portName && portType) {
+                    if (portType === 'any') portType = -1;
+                    outputs.push([portName, portType]);
+                }
             });
 
             // Define custom node
