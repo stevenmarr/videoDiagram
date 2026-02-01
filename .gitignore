@@ -1,0 +1,29 @@
+# Python virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Flask / development files
+*.pyc
+*.log
+*.pot
+instance/
+
+# macOS / Windows junk
+.DS_Store
+Thumbs.db
+
+# Editor / IDE files
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Optional: ignore large static files if you add them later
+# static/uploads/
