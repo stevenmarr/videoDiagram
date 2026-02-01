@@ -26,4 +26,4 @@ Thumbs.db
 *.sublime-workspace
 
 # Optional: ignore large static files if you add them later
-# static/uploads/
+# static/uploads/venv/
