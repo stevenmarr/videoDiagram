@@ -10,8 +10,8 @@
 </head>
 <body>
     <div id="controls">
-        <button onclick="openWizard()">Create New Equipment Type</button>
-        <button onclick="generateReport()">Generate Report</button>
+        <button id="addNodeButton">Add Node</button>
+        <button id="generateReportButton">Generate Report</button>
     </div>
     <canvas id="mycanvas"></canvas>
     <div id="report"></div>
@@ -22,17 +22,28 @@
             <span class="close" onclick="closeWizard()">&times;</span>
             <h2>Create New Equipment Type</h2>
             <form id="nodeForm">
-                <label>Equipment Type Name:</label><br>
-                <input type="text" id="nodeName" required><br><br>
-                
-                <label>Make:</label><br>
-                <input type="text" id="make" required><br><br>
+                <label>Equipment Type:</label><br>
+                <select id="equipmentType" onchange="updateManufacturers()" required>
+                    <option value="">Select Type</option>
+                    <!-- Populated via JS -->
+                </select>
+                <input type="text" id="customType" placeholder="Enter new type" style="display:none;"><br><br>
                 
                 <label>Manufacturer:</label><br>
-                <input type="text" id="manufacturer" required><br><br>
+                <select id="manufacturer" onchange="updateModels()" required>
+                    <option value="">Select Manufacturer</option>
+                    <!-- Populated via JS -->
+                </select>
+                <input type="text" id="customManufacturer" placeholder="Enter new manufacturer" style="display:none;"><br><br>
                 
-                <label>Specifications:</label><br>
-                <textarea id="specs" rows="4" required></textarea><br><br>
+                <label>Model:</label><br>
+                <select id="model" required>
+                    <option value="">Select Model</option>
+                    <!-- Populated via JS -->
+                </select>
+                <input type="text" id="customModel" placeholder="Enter new model" style="display:none;"><br><br>
+                
+                <!-- Specifications skipped for now -->
                 
                 <label>Inputs (add ports):</label>
                 <div id="inputsList" class="dynamic-list"></div>
