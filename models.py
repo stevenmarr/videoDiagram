@@ -1,7 +1,7 @@
 """
 Model module for the Video Flow Line Diagram Editor.
 
-Added ConnectionType for standards. No new data added—using presented lists.
+Added NodeType for persistence. No new data.
 
 For testing: Query counts (e.g., assert EquipmentType.query.count() > 0).
 """
@@ -34,6 +34,11 @@ class ConnectionType(db.Model):
     name = db.Column(db.String(50), unique=True, nullable=False)
     color = db.Column(db.String(7), nullable=False)  # Hex color
     group = db.Column(db.String(50), nullable=False)
+
+class NodeType(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    key = db.Column(db.String(200), unique=True, nullable=False)
+    spec = db.Column(db.Text, nullable=False)  # JSON string of node spec (title, inputs, outputs, properties)
 
 # Initial seed data (used in app.py; no new additions)
 EQUIPMENT_TYPES = [

@@ -1,130 +1,228 @@
 """
-Controller module for the Video Flow Line Diagram Editor.
+app.py - Controller layer for the Video Flow Line Diagram Editor
 
-Added routes/seeding for ConnectionType. No new data—using presented lists.
+Flask application with MVC structure:
+- Models: models.py (SQLAlchemy models)
+- Views: templates/index.html + client-side JS
+- Controller: this file (routes, business logic)
 
-For testing: Run pytest for routes/DB (see tests/test_app.py).
+Uses SQLite for persistence (node types, manufacturers, connection types).
+Node type registration happens client-side via /api/node_types.
+
+Run with: python3 app.py
 """
 
 from flask import Flask, render_template, jsonify, request
-from db import db  # Import db from db.py
+from db import db
+from models import (
+    EquipmentType,
+    Manufacturer,
+    Model,
+    ConnectionType,
+    NodeType,
+    Association,
+    EQUIPMENT_TYPES,
+    MANUFACTURERS_BY_TYPE,
+    MODELS_BY_MANUFACTURER,
+    VIDEO_STANDARDS
+)
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///data.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db.init_app(app)
 
-# Import models after db init
-from models import EquipmentType, Manufacturer, Model, ConnectionType, Association, EQUIPMENT_TYPES, MANUFACTURERS_BY_TYPE, MODELS_BY_MANUFACTURER, VIDEO_STANDARDS
 
-def create_db():
-    """
-    Seed initial data if DB empty.
-    """
+def seed_database():
+    """Seed initial data if tables are empty."""
     db.create_all()
+
+    # Equipment Types
     if EquipmentType.query.count() == 0:
-        # Seed types
-        for t in EQUIPMENT_TYPES:
-            db.session.add(EquipmentType(name=t))
+        for name in EQUIPMENT_TYPES:
+            db.session.add(EquipmentType(name=name))
         db.session.commit()
-        
-        # Seed manufacturers and associations
-        for t_name, mans in MANUFACTURERS_BY_TYPE.items():
-            type_obj = EquipmentType.query.filter_by(name=t_name).first()
-            for m in mans:
-                man_obj = Manufacturer.query.filter_by(name=m).first()
-                if not man_obj:
-                    man_obj = Manufacturer(name=m)
-                    db.session.add(man_obj)
+
+    # Manufacturers & associations
+    if Manufacturer.query.count() == 0:
+        for eq_type_name, man_list in MANUFACTURERS_BY_TYPE.items():
+            eq_type = EquipmentType.query.filter_by(name=eq_type_name).first()
+            if not eq_type:
+                continue
+            for man_name in man_list:
+                man = Manufacturer.query.filter_by(name=man_name).first()
+                if not man:
+                    man = Manufacturer(name=man_name)
+                    db.session.add(man)
                     db.session.commit()
-                if type_obj and man_obj not in type_obj.manufacturers:
-                    type_obj.manufacturers.append(man_obj)
-                    db.session.commit()
-        
-        # Seed models
-        for m_name, mods in MODELS_BY_MANUFACTURER.items():
-            man_obj = Manufacturer.query.filter_by(name=m_name).first()
-            if man_obj:
-                for mod in mods:
-                    mod_obj = Model(name=mod, manufacturer_id=man_obj.id)
-                    db.session.add(mod_obj)
+                if man not in eq_type.manufacturers:
+                    eq_type.manufacturers.append(man)
         db.session.commit()
-    
+
+    # Models
+    if Model.query.count() == 0:
+        for man_name, model_list in MODELS_BY_MANUFACTURER.items():
+            man = Manufacturer.query.filter_by(name=man_name).first()
+            if man:
+                for model_name in model_list:
+                    if not Model.query.filter_by(name=model_name, manufacturer_id=man.id).first():
+                        db.session.add(Model(name=model_name, manufacturer_id=man.id))
+        db.session.commit()
+
+    # Connection Types (video standards)
     if ConnectionType.query.count() == 0:
-        # Seed connection types
         for std in VIDEO_STANDARDS:
-            db.session.add(ConnectionType(name=std['name'], color=std['color'], group=std['group']))
+            db.session.add(ConnectionType(
+                name=std['name'],
+                color=std['color'],
+                group=std['group']
+            ))
         db.session.commit()
+
+
+@app.before_request
+def initialize_db():
+    """Run seeding once at startup (safe to call multiple times)."""
+    if not hasattr(initialize_db, 'has_run'):
+        with app.app_context():
+            seed_database()
+        initialize_db.has_run = True
+
 
 @app.route('/')
 def index():
+    """Serve the main single-page application."""
     return render_template('index.html')
 
+
 @app.route('/api/equipment_types', methods=['GET'])
-def get_equipment_types():
+def api_equipment_types():
+    """List all equipment types."""
     types = [t.name for t in EquipmentType.query.all()]
     return jsonify(types)
 
+
+@app.route('/api/manufacturers', methods=['GET'])
+def api_all_manufacturers():
+    """List all manufacturers (used in wizard dropdown)."""
+    manufacturers = [m.name for m in Manufacturer.query.all()]
+    return jsonify(manufacturers)
+
+
 @app.route('/api/manufacturers/<equipment_type>', methods=['GET'])
-def get_manufacturers(equipment_type):
-    type_obj = EquipmentType.query.filter_by(name=equipment_type).first()
-    if type_obj:
-        mans = [assoc.manufacturer.name for assoc in type_obj.manufacturers]
-    else:
-        mans = []
-    return jsonify(mans)
+def api_manufacturers_for_type(equipment_type):
+    """Manufacturers associated with a specific equipment type."""
+    eq_type = EquipmentType.query.filter_by(name=equipment_type).first()
+    if eq_type:
+        return jsonify([m.name for m in eq_type.manufacturers])
+    return jsonify([])
+
 
 @app.route('/api/models/<manufacturer>', methods=['GET'])
-def get_models(manufacturer):
-    man_obj = Manufacturer.query.filter_by(name=manufacturer).first()
-    if man_obj:
-        mods = [m.name for m in man_obj.models]
-    else:
-        mods = []
-    return jsonify(mods)
+def api_models_for_manufacturer(manufacturer):
+    """Models for a given manufacturer."""
+    man = Manufacturer.query.filter_by(name=manufacturer).first()
+    if man:
+        return jsonify([m.name for m in man.models])
+    return jsonify([])
+
 
 @app.route('/api/connection_types', methods=['GET'])
-def get_connection_types():
-    types = [{"name": t.name, "color": t.color, "group": t.group} for t in ConnectionType.query.all()]
+def api_connection_types():
+    """All video/connection standards with color and group."""
+    types = [
+        {"name": t.name, "color": t.color, "group": t.group}
+        for t in ConnectionType.query.all()
+    ]
     return jsonify(types)
 
+
+@app.route('/api/node_types', methods=['GET'])
+def api_node_types():
+    """All persisted custom node types (for client-side registration)."""
+    nodes = [
+        {"key": nt.key, "spec": nt.spec}
+        for nt in NodeType.query.all()
+    ]
+    return jsonify(nodes)
+
+
 @app.route('/api/add_type', methods=['POST'])
-def add_type():
-    name = request.form['name']
+def api_add_equipment_type():
+    name = request.form.get('name', '').strip()
+    if not name:
+        return jsonify({"error": "Name required"}), 400
     if not EquipmentType.query.filter_by(name=name).first():
-        new_type = EquipmentType(name=name)
-        db.session.add(new_type)
+        db.session.add(EquipmentType(name=name))
         db.session.commit()
     return jsonify({"status": "ok"})
+
 
 @app.route('/api/add_manufacturer', methods=['POST'])
-def add_manufacturer():
-    name = request.form['name']
-    type_name = request.form['type']
-    type_obj = EquipmentType.query.filter_by(name=type_name).first()
-    if not Manufacturer.query.filter_by(name=name).first():
-        new_man = Manufacturer(name=name)
-        db.session.add(new_man)
-        db.session.commit()
-        if type_obj:
-            type_obj.manufacturers.append(new_man)
+def api_add_manufacturer():
+    name = request.form.get('name', '').strip()
+    type_name = request.form.get('type', '').strip()
+
+    if not name:
+        return jsonify({"error": "Name required"}), 400
+
+    if Manufacturer.query.filter_by(name=name).first():
+        return jsonify({"status": "already exists"})
+
+    new_man = Manufacturer(name=name)
+    db.session.add(new_man)
+    db.session.commit()
+
+    # Optional: associate with type
+    if type_name:
+        eq_type = EquipmentType.query.filter_by(name=type_name).first()
+        if eq_type:
+            eq_type.manufacturers.append(new_man)
             db.session.commit()
+
     return jsonify({"status": "ok"})
+
 
 @app.route('/api/add_model', methods=['POST'])
-def add_model():
-    name = request.form['name']
-    man_name = request.form['manufacturer']
-    man_obj = Manufacturer.query.filter_by(name=man_name).first()
-    if man_obj and not Model.query.filter_by(name=name, manufacturer_id=man_obj.id).first():
-        new_mod = Model(name=name, manufacturer_id=man_obj.id)
-        db.session.add(new_mod)
-        db.session.commit()
+def api_add_model():
+    name = request.form.get('name', '').strip()
+    man_name = request.form.get('manufacturer', '').strip()
+
+    if not name or not man_name:
+        return jsonify({"error": "Name and manufacturer required"}), 400
+
+    man = Manufacturer.query.filter_by(name=man_name).first()
+    if not man:
+        return jsonify({"error": "Manufacturer not found"}), 404
+
+    if Model.query.filter_by(name=name, manufacturer_id=man.id).first():
+        return jsonify({"status": "already exists"})
+
+    db.session.add(Model(name=name, manufacturer_id=man.id))
+    db.session.commit()
     return jsonify({"status": "ok"})
 
+
+@app.route('/api/add_node_type', methods=['POST'])
+def api_add_node_type():
+    key = request.form.get('key', '').strip()
+    spec = request.form.get('spec', '').strip()  # JSON string
+
+    if not key or not spec:
+        return jsonify({"error": "key and spec required"}), 400
+
+    nt = NodeType.query.filter_by(key=key).first()
+    if nt:
+        nt.spec = spec
+    else:
+        nt = NodeType(key=key, spec=spec)
+        db.session.add(nt)
+
+    db.session.commit()
+    return jsonify({"status": "ok", "key": key})
+
+
 if __name__ == '__main__':
-    with app.app_context():
-        create_db()
     app.run(debug=True, extra_files=[
         'templates/index.html',
         'static/js/app.js',

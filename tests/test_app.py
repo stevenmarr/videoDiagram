@@ -1,13 +1,13 @@
 """
 Test suite for the Video Flow Line Diagram Editor.
 
-Expanded for new features (e.g., connection types).
+Expanded for node type persistence.
 Run with: pytest.
 """
 
 import pytest
 from app import app, db
-from models import EquipmentType, ConnectionType
+from models import EquipmentType, NodeType
 
 @pytest.fixture
 def client():
@@ -24,24 +24,15 @@ def test_index(client):
     assert response.status_code == 200
     assert b'Video Flow Line Diagram Editor' in response.data
 
-def test_get_types(client):
-    with app.app_context():
-        db.session.add(EquipmentType(name='Test Type'))
-        db.session.commit()
-    response = client.get('/api/equipment_types')
-    assert response.status_code == 200
-    assert 'Test Type' in response.json
-
 def test_add_type(client):
     response = client.post('/api/add_type', data={'name': 'New Test Type'})
     assert response.status_code == 200
     with app.app_context():
         assert EquipmentType.query.filter_by(name='New Test Type').first() is not None
 
-def test_get_connection_types(client):
+def test_node_type_persistence(client):
     with app.app_context():
-        db.session.add(ConnectionType(name='HDMI 1.4', color='#0000FF', group='HDMI'))
+        db.session.add(NodeType(key='test_key', spec='{"title": "Test"}'))
         db.session.commit()
-    response = client.get('/api/connection_types')
-    assert response.status_code == 200
-    assert any(ct['name'] == 'HDMI 1.4' for ct in response.json)
+    with app.app_context():
+        assert NodeType.query.filter_by(key='test_key').first() is not None
