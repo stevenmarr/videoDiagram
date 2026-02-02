@@ -6,7 +6,6 @@ let videoStandards = [];
 let graph;
 let editingType = null;  // Currently edited node type key
 let instanceNode = null;  // Currently edited instance node
-let currentCreatorPanel = null;  // Floating creator panel reference
 
 // Wait for DOM to load before initializing
 document.addEventListener('DOMContentLoaded', async function() {
@@ -47,8 +46,10 @@ document.addEventListener('DOMContentLoaded', async function() {
     graph = new LGraph();
     graph.config = { links_ontop: true };
     const canvas = new LGraphCanvas("#mycanvas", graph);
+    // Scale contexts
     canvas.ctx.scale(dpr, dpr);
     canvas.bgctx.scale(dpr, dpr);
+    // Set bgcanvas size
     canvas.bgcanvas.width = canvasEl.width;
     canvas.bgcanvas.height = canvasEl.height;
     graph.start();
@@ -73,6 +74,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     const originalDrawNode = LGraphCanvas.prototype.drawNode;
     LGraphCanvas.prototype.drawNode = function(node, ctx) {
         originalDrawNode.apply(this, arguments);
+        // Color inputs/outputs based on standard
         if (node.inputs) {
             node.inputs.forEach((input, i) => {
                 if (input.pos && input.pos.length >= 2) {
@@ -357,12 +359,12 @@ function showNodeCreator(x = 300, y = 300, isEdit = false) {
 
     document.body.appendChild(currentCreatorPanel);
 
-    // Device type change listener
+    // Device type listener
     document.getElementById('nc-device-type').addEventListener('change', e => {
         document.getElementById('nc-device-new').style.display = e.target.value === 'new' ? 'block' : 'none';
     });
 
-    // Manufacturer change listener
+    // Manufacturer listener
     document.getElementById('nc-manu').addEventListener('change', e => {
         document.getElementById('nc-manu-new').style.display = e.target.value === 'new' ? 'block' : 'none';
     });
@@ -382,6 +384,7 @@ function showNodeCreator(x = 300, y = 300, isEdit = false) {
     }
 }
 
+// Close creator panel
 function closeNodeCreator() {
     if (currentCreatorPanel) {
         currentCreatorPanel.remove();
@@ -414,33 +417,29 @@ function addPortToCreator(portType) {
 
 // Save node creator
 async function saveNodeCreator() {
-    // Check panel exists
-    if (!currentCreatorPanel) return;
-
-    const titleInput = document.getElementById('nc-title');
-    const categoryInput = document.getElementById('nc-device-type');
-    const manuSelect = document.getElementById('nc-manu');
-    const manuNewInput = document.getElementById('nc-manu-new');
-    const ipCheckbox = document.getElementById('nc-ipcapable');
-
-    // Bail if elements not found
-    if (!titleInput || !categoryInput || !manuSelect || !ipCheckbox) {
-        console.error("Creator panel elements not found");
+    if (!currentCreatorPanel) {
+        alert("Editor panel not open.");
         return;
     }
 
-    let category = categoryInput.value;
+    const titleEl = document.getElementById('nc-title');
+    const categoryEl = document.getElementById('nc-device-type');
+    const manuEl = document.getElementById('nc-manu');
+    const manuNewEl = document.getElementById('nc-manu-new');
+    const ipEl = document.getElementById('nc-ipcapable');
+
+    let category = categoryEl.value;
     if (category === 'new') {
         category = document.getElementById('nc-device-new').value.trim();
     }
 
-    let manufacturer = manuSelect.value;
+    let manufacturer = manuEl.value;
     if (manufacturer === 'new') {
-        manufacturer = manuNewInput.value.trim();
+        manufacturer = manuNewEl.value.trim();
     }
 
-    const title = titleInput.value.trim();
-    const ipCapable = ipCheckbox.checked;
+    const title = titleEl.value.trim();
+    const ipCapable = ipEl.checked;
 
     if (!title || !category || !manufacturer) {
         alert("Title, Device Type, and Manufacturer are required.");
@@ -507,14 +506,16 @@ async function saveNodeCreator() {
     };
 
     try {
-        const response = await fetch('/api/add_node_type', {
+        const res = await fetch('/api/add_node_type', {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
             body: `key=${encodeURIComponent(key)}&spec=${encodeURIComponent(JSON.stringify(specObj))}`
         });
-        if (!response.ok) {
-            throw new Error('Server error: ' + response.status);
+
+        if (!res.ok) {
+            throw new Error(`Server error: ${res.status}`);
         }
+
         updateSidebar();
         closeNodeCreator();
         alert(`Node type "${name}" ${editingType ? 'updated' : 'created'} successfully!`);
@@ -529,10 +530,10 @@ function addNodeInstance(key, x, y) {
     const node = LiteGraph.createNode(key);
     if (!node) return;
 
-    const baseTitle = node.title.replace(/\ \d+$/, '');
-    const sameType = graph._nodes.filter(n => n.type === key);
-    const count = sameType.length + 1;
-    node.title = baseTitle + ' ' + count;
+    const base = node.title.replace(/\ \d+$/, '');
+    const same = graph._nodes.filter(n => n.title.startsWith(base));
+    const count = same.length + 1;
+    node.title = base + ' ' + count;
     node.pos = [x, y];
     graph.add(node);
 }
@@ -597,7 +598,7 @@ function generateReport() {
         connectionsHtml += `<tr>
             <td>${fromId} (${fromNode.title})</td>
             <td>${outputName}</td>
-            <td>${toId} (${toNode.title}</td>
+            <td>${toId} (${toNode.title})</td>
             <td>${inputName}</td>
         </tr>`;
     });
