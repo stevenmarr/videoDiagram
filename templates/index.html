@@ -9,39 +9,34 @@
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 </head>
 <body>
-    <div id="controls">
-        <button id="addNodeButton">Add Node</button>
+    <div id="sidebar" style="position: absolute; left: 0; top: 0; bottom: 0; width: 200px; background: #f0f0f0; overflow: auto;">
+        <h3>Available Nodes</h3>
+        <ul id="nodeList"></ul>
+    </div>
+    <div id="controls" style="padding-left: 210px;">
+        <button id="createNodeButton">Create New Node</button>
         <button id="generateReportButton">Generate Report</button>
     </div>
-    <canvas id="mycanvas"></canvas>
-    <div id="report"></div>
+    <canvas id="mycanvas" style="margin-left: 200px;"></canvas>
+    <div id="report" style="margin-left: 200px;"></div>
 
-    <!-- Modal for Wizard -->
+    <!-- Modal for Wizard (text inputs for type/manu/model) -->
     <div id="wizardModal" class="modal">
         <div class="modal-content">
             <span class="close" onclick="closeWizard()">&times;</span>
-            <h2>Create New Equipment Type</h2>
+            <h2>Create/Edit Node Type</h2>
             <form id="nodeForm">
                 <label>Equipment Type:</label><br>
-                <select id="equipmentType" onchange="updateManufacturers()" required>
-                    <option value="">Select Type</option>
-                    <!-- Populated via JS -->
-                </select>
-                <input type="text" id="customType" placeholder="Enter new type" style="display:none;"><br><br>
+                <input type="text" id="equipmentType" required><br><br>
                 
                 <label>Manufacturer:</label><br>
-                <select id="manufacturer" onchange="updateModels()" required>
-                    <option value="">Select Manufacturer</option>
-                    <!-- Populated via JS -->
-                </select>
-                <input type="text" id="customManufacturer" placeholder="Enter new manufacturer" style="display:none;"><br><br>
+                <input type="text" id="manufacturer" required><br><br>
                 
                 <label>Model:</label><br>
-                <select id="model" required>
-                    <option value="">Select Model</option>
-                    <!-- Populated via JS -->
-                </select>
-                <input type="text" id="customModel" placeholder="Enter new model" style="display:none;"><br><br>
+                <input type="text" id="model" required><br><br>
+                
+                <label>IP Capable:</label><br>
+                <input type="checkbox" id="ipCapable"><br><br>
                 
                 <!-- Specifications skipped for now -->
                 
@@ -53,7 +48,24 @@
                 <div id="outputsList" class="dynamic-list"></div>
                 <button type="button" onclick="addDynamicField('outputs')">Add Output</button><br><br>
                 
-                <button type="button" onclick="createNodeType()">Submit</button>
+                <button type="button" onclick="createOrEditNodeType()">Submit</button>
+            </form>
+        </div>
+    </div>
+    
+    <!-- Dialog for Instance Edit -->
+    <div id="instanceEditModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeInstanceEdit()">&times;</span>
+            <h2>Edit Node Instance</h2>
+            <form id="instanceForm">
+                <label>Device ID:</label><br>
+                <input type="text" id="deviceId" required><br><br>
+                
+                <label>IP Address (if applicable):</label><br>
+                <input type="text" id="ipAddress"><br><br>
+                
+                <button type="button" onclick="saveInstanceEdit()">Save</button>
             </form>
         </div>
     </div>

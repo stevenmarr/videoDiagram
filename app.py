@@ -1,8 +1,7 @@
 """
 Controller module for the Video Flow Line Diagram Editor.
 
-Fixed many-to-many association by appending to relationship instead of instantiating Table.
-No new data—using presented lists.
+Added routes/seeding for ConnectionType. No new data—using presented lists.
 
 For testing: Run pytest for routes/DB (see tests/test_app.py).
 """
@@ -16,7 +15,7 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db.init_app(app)
 
 # Import models after db init
-from models import EquipmentType, Manufacturer, Model, EQUIPMENT_TYPES, MANUFACTURERS_BY_TYPE, MODELS_BY_MANUFACTURER, VIDEO_STANDARDS
+from models import EquipmentType, Manufacturer, Model, ConnectionType, Association, EQUIPMENT_TYPES, MANUFACTURERS_BY_TYPE, MODELS_BY_MANUFACTURER, VIDEO_STANDARDS
 
 def create_db():
     """
@@ -50,6 +49,12 @@ def create_db():
                     mod_obj = Model(name=mod, manufacturer_id=man_obj.id)
                     db.session.add(mod_obj)
         db.session.commit()
+    
+    if ConnectionType.query.count() == 0:
+        # Seed connection types
+        for std in VIDEO_STANDARDS:
+            db.session.add(ConnectionType(name=std['name'], color=std['color'], group=std['group']))
+        db.session.commit()
 
 @app.route('/')
 def index():
@@ -78,9 +83,10 @@ def get_models(manufacturer):
         mods = []
     return jsonify(mods)
 
-@app.route('/api/video_standards', methods=['GET'])
-def get_video_standards():
-    return jsonify(VIDEO_STANDARDS)
+@app.route('/api/connection_types', methods=['GET'])
+def get_connection_types():
+    types = [{"name": t.name, "color": t.color, "group": t.group} for t in ConnectionType.query.all()]
+    return jsonify(types)
 
 @app.route('/api/add_type', methods=['POST'])
 def add_type():

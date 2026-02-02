@@ -1,8 +1,7 @@
-# models.py (Model - Use db from db.py)
 """
 Model module for the Video Flow Line Diagram Editor.
 
-Uses db from db.py for persistence. No new data added—using presented lists.
+Added ConnectionType for standards. No new data added—using presented lists.
 
 For testing: Query counts (e.g., assert EquipmentType.query.count() > 0).
 """
@@ -29,6 +28,12 @@ class Model(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
     manufacturer_id = db.Column(db.Integer, db.ForeignKey('manufacturer.id'), nullable=False)
+
+class ConnectionType(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(50), unique=True, nullable=False)
+    color = db.Column(db.String(7), nullable=False)  # Hex color
+    group = db.Column(db.String(50), nullable=False)
 
 # Initial seed data (used in app.py; no new additions)
 EQUIPMENT_TYPES = [
@@ -142,7 +147,7 @@ MODELS_BY_MANUFACTURER = {
     "Custom": [],
 }
 
-# Video Standards (unchanged)
+# Video Standards (moved to DB seeding in app.py)
 VIDEO_STANDARDS = [
     {"name": "HDMI 1.4", "color": "#0000FF", "group": "HDMI"},
     {"name": "HDMI 2.0", "color": "#0000CC", "group": "HDMI"},
