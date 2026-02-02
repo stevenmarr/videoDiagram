@@ -13,7 +13,14 @@ Run with: python3 app.py
 """
 
 from flask import Flask, render_template, jsonify, request
-from db import db
+from db import db  # ← now safe to import
+
+app = Flask(__name__)
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///data.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+db.init_app(app)
+
+# Import models AFTER db.init_app(app)
 from models import (
     EquipmentType,
     Manufacturer,
@@ -26,6 +33,8 @@ from models import (
     MODELS_BY_MANUFACTURER,
     VIDEO_STANDARDS
 )
+
+# ... rest of your app.py code remains the same ...
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///data.db'

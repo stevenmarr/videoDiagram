@@ -6,9 +6,10 @@ Added NodeType for persistence. No new data.
 For testing: Query counts (e.g., assert EquipmentType.query.count() > 0).
 """
 
-from db import db  # Import db from db.py
+# models.py
+from db import db  # ← correct import
 
-# Many-to-many association for types and manufacturers
+# Association table and all your model classes...
 Association = db.Table('association',
     db.Column('type_id', db.Integer, db.ForeignKey('equipment_type.id'), primary_key=True),
     db.Column('manufacturer_id', db.Integer, db.ForeignKey('manufacturer.id'), primary_key=True)
@@ -19,6 +20,7 @@ class EquipmentType(db.Model):
     name = db.Column(db.String(100), unique=True, nullable=False)
     manufacturers = db.relationship('Manufacturer', secondary=Association, backref=db.backref('types', lazy=True))
 
+# ... rest of your models ...
 class Manufacturer(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), unique=True, nullable=False)

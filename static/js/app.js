@@ -1,101 +1,113 @@
-// Client-side JavaScript logic for the Video Flow Line Diagram Editor.
-// This handles the node editor, wizard, and report generation using LiteGraph.
+// static/js/app.js
+// Client-side JavaScript logic for the Video Flow Line Diagram Editor
+// Uses LiteGraph.js for node-based editor
 
-// Global variables
+// === TOP-LEVEL GLOBALS - declared first to avoid uninitialized errors ===
 let videoStandards = [];
 let graph;
-let editingType = null;  // Currently edited node type key
-let instanceNode = null;  // Currently edited instance node
+let canvasInstance;               // LGraphCanvas reference
+let editingType = null;           // Currently edited node type key
+let instanceNode = null;          // Currently edited instance node
+let currentCreatorPanel = null;   // Floating creator panel reference
 
-// Wait for DOM to load before initializing
-document.addEventListener('DOMContentLoaded', async function() {
-    // Fetch video standards from DB
+// Wait for DOM ready
+document.addEventListener('DOMContentLoaded', async function () {
+    // Load video standards (connection types)
     const standardsRes = await fetch('/api/connection_types');
     videoStandards = await standardsRes.json();
 
-    // Fetch and register persisted node types from DB
+    // Load and register persisted node types from DB
     const nodeTypesRes = await fetch('/api/node_types');
-    const persistedNodes = await nodeTypesRes.json();
-    persistedNodes.forEach(({ key, spec }) => {
+    const persisted = await nodeTypesRes.json();
+    persisted.forEach(({ key, spec }) => {
         try {
             const nodeSpec = JSON.parse(spec);
+
             function CustomEquipment() {
-                nodeSpec.inputs.forEach(([n, t]) => this.addInput(n, t));
-                nodeSpec.outputs.forEach(([n, t]) => this.addOutput(n, t));
-                this.properties = nodeSpec.properties;
+                // Apply ports when node is created
+                (nodeSpec.inputs || []).forEach(([n, t]) => this.addInput(n, t));
+                (nodeSpec.outputs || []).forEach(([n, t]) => this.addOutput(n, t));
+                this.properties = { ...nodeSpec.properties };
+                this.title = nodeSpec.title || key.replace('equipment/', '');
             }
-            CustomEquipment.title = nodeSpec.title;
-            CustomEquipment.prototype.onDrawBackground = function(ctx) {
-                // Optional: Custom rendering
-            };
+
+            // Attach prototype so ports persist on instances
+            CustomEquipment.prototype.inputs = nodeSpec.inputs || [];
+            CustomEquipment.prototype.outputs = nodeSpec.outputs || [];
+
+            CustomEquipment.prototype.onDrawBackground = function(ctx) { /* optional */ };
+
             LiteGraph.registerNodeType(key, CustomEquipment);
         } catch (e) {
             console.error(`Failed to register node type ${key}:`, e);
         }
     });
 
-    // Setup LiteGraph
+    // Setup canvas
     const canvasEl = document.getElementById('mycanvas');
     const dpr = window.devicePixelRatio || 1;
     const cssWidth = window.innerWidth - 200;
     const cssHeight = window.innerHeight * 0.8;
+
     canvasEl.width = cssWidth * dpr;
     canvasEl.height = cssHeight * dpr;
     canvasEl.style.width = cssWidth + 'px';
     canvasEl.style.height = cssHeight + 'px';
+
     graph = new LGraph();
     graph.config = { links_ontop: true };
-    const canvas = new LGraphCanvas("#mycanvas", graph);
-    // Scale contexts
-    canvas.ctx.scale(dpr, dpr);
-    canvas.bgctx.scale(dpr, dpr);
-    // Set bgcanvas size
-    canvas.bgcanvas.width = canvasEl.width;
-    canvas.bgcanvas.height = canvasEl.height;
+    canvasInstance = new LGraphCanvas("#mycanvas", graph);
+
+    canvasInstance.ctx.scale(dpr, dpr);
+    canvasInstance.bgctx.scale(dpr, dpr);
+    canvasInstance.bgcanvas.width = canvasEl.width;
+    canvasInstance.bgcanvas.height = canvasEl.height;
+
     graph.start();
 
-    // Override connect to check compatibility
+    // Prevent incompatible connections
     const originalConnect = LGraphNode.prototype.connect;
     LGraphNode.prototype.connect = function(slot, targetNode, targetSlot) {
         const output = this.outputs[slot];
         const input = targetNode.inputs[targetSlot];
         if (output && input) {
-            const outputStd = videoStandards.find(s => s.name === output.type);
-            const inputStd = videoStandards.find(s => s.name === input.type);
-            if (outputStd && inputStd && outputStd.group !== inputStd.group) {
-                alert('Incompatible port types: ' + output.type + ' and ' + input.type);
+            const outStd = videoStandards.find(s => s.name === output.type);
+            const inStd  = videoStandards.find(s => s.name === input.type);
+            if (outStd && inStd && outStd.group !== inStd.group) {
+                alert(`Cannot connect ${output.type} → ${input.type}`);
                 return false;
             }
         }
         return originalConnect.apply(this, arguments);
     };
 
-    // Override drawing to color ports
+    // Colored ports
     const originalDrawNode = LGraphCanvas.prototype.drawNode;
     LGraphCanvas.prototype.drawNode = function(node, ctx) {
         originalDrawNode.apply(this, arguments);
-        // Color inputs/outputs based on standard
+
         if (node.inputs) {
-            node.inputs.forEach((input, i) => {
+            node.inputs.forEach(input => {
                 if (input.pos && input.pos.length >= 2) {
                     const std = videoStandards.find(s => s.name === input.type);
                     if (std) {
                         ctx.fillStyle = std.color;
                         ctx.beginPath();
-                        ctx.arc(input.pos[0], input.pos[1], 5, 0, 2 * Math.PI);
+                        ctx.arc(input.pos[0], input.pos[1], 6, 0, Math.PI * 2);
                         ctx.fill();
                     }
                 }
             });
         }
+
         if (node.outputs) {
-            node.outputs.forEach((output, i) => {
+            node.outputs.forEach(output => {
                 if (output.pos && output.pos.length >= 2) {
                     const std = videoStandards.find(s => s.name === output.type);
                     if (std) {
                         ctx.fillStyle = std.color;
                         ctx.beginPath();
-                        ctx.arc(output.pos[0], output.pos[1], 5, 0, 2 * Math.PI);
+                        ctx.arc(output.pos[0], output.pos[1], 6, 0, Math.PI * 2);
                         ctx.fill();
                     }
                 }
@@ -103,41 +115,26 @@ document.addEventListener('DOMContentLoaded', async function() {
         }
     };
 
-    // Override link drawing for color
+    // Colored links
     const originalDrawLink = LGraphCanvas.prototype.drawLink;
     LGraphCanvas.prototype.drawLink = function(link, ctx) {
-        const output = link.origin_node.outputs[link.origin_slot];
-        if (output) {
-            const std = videoStandards.find(s => s.name === output.type);
-            if (std) {
-                ctx.strokeStyle = std.color;
-            }
+        const out = link.origin_node.outputs[link.origin_slot];
+        if (out) {
+            const std = videoStandards.find(s => s.name === out.type);
+            if (std) ctx.strokeStyle = std.color;
         }
         originalDrawLink.apply(this, arguments);
         ctx.strokeStyle = LiteGraph.LINK_COLOR; // reset
     };
 
-    // Event listeners for buttons
-    document.getElementById('createNodeButton').addEventListener('click', () => openWizard('create'));
-    document.getElementById('generateReportButton').addEventListener('click', generateReport);
-
-    // Drag & drop from sidebar
-    canvasEl.addEventListener('drop', (e) => {
-        e.preventDefault();
-        const type = e.dataTransfer.getData('node-type');
-        if (type) {
-            addNodeInstance(type, e.clientX - 200, e.clientY);
-        }
-    });
-    canvasEl.addEventListener('dragover', (e) => e.preventDefault());
-
-    // Canvas right-click menu
-    canvas.canvas.addEventListener('contextmenu', function(e) {
+    // Right-click context menu
+    canvasInstance.canvas.addEventListener('contextmenu', function(e) {
         e.preventDefault();
         e.stopPropagation();
 
-        const canvasX = canvas.canvasX;
-        const canvasY = canvas.canvasY;
+        const offset = canvasInstance.convertEventToCanvasOffset(e);
+        const canvasX = offset.x;
+        const canvasY = offset.y;
 
         const menuItems = [
             {
@@ -177,20 +174,16 @@ document.addEventListener('DOMContentLoaded', async function() {
             }
         ];
 
-        new LiteGraph.ContextMenu(menuItems, {
-            event: e,
-            callback: null,
-            parentMenu: null
-        });
+        new LiteGraph.ContextMenu(menuItems, { event: e });
     });
 
-    // Node right-click for instance edit
-    canvas.onShowNodePanel = function (node, e) {
+    // Node right-click → edit instance properties
+    canvasInstance.onShowNodePanel = function(node) {
         openInstanceEdit(node);
     };
 
-    // Sidebar right-click for type edit
-    document.getElementById('nodeList').addEventListener('contextmenu', (e) => {
+    // Sidebar right-click → edit node type
+    document.getElementById('nodeList').addEventListener('contextmenu', e => {
         if (e.target.tagName === 'LI') {
             editingType = e.target.dataset.type;
             showNodeCreator(null, null, true); // edit mode
@@ -198,7 +191,18 @@ document.addEventListener('DOMContentLoaded', async function() {
         }
     });
 
-    // Initial sidebar
+    // Drag from sidebar
+    canvasEl.addEventListener('drop', e => {
+        e.preventDefault();
+        const type = e.dataTransfer.getData('node-type');
+        if (type) {
+            const offset = canvasInstance.convertEventToCanvasOffset(e);
+            addNodeInstance(type, offset.x, offset.y);
+        }
+    });
+    canvasEl.addEventListener('dragover', e => e.preventDefault());
+
+    // Initial sidebar population
     updateSidebar();
 });
 
@@ -288,7 +292,7 @@ function updateSidebar() {
         li.textContent = nodeClass.title;
         li.draggable = true;
         li.dataset.type = key;
-        li.addEventListener('dragstart', (e) => e.dataTransfer.setData('node-type', key));
+        li.addEventListener('dragstart', e => e.dataTransfer.setData('node-type', key));
         groups[cat].push(li);
     });
 
@@ -321,6 +325,7 @@ function showNodeCreator(x = 300, y = 300, isEdit = false) {
     currentCreatorPanel.style.boxShadow = '0 0 20px rgba(0,0,0,0.7)';
     currentCreatorPanel.innerHTML = `
         <h3>${isEdit ? 'Edit Node Type' : 'Create New Node Type'}</h3>
+
         <label>Device Type:</label><br>
         <select id="nc-device-type" style="width:100%; margin:5px 0;">
             <option value="new">Add new device type...</option>
@@ -359,12 +364,12 @@ function showNodeCreator(x = 300, y = 300, isEdit = false) {
 
     document.body.appendChild(currentCreatorPanel);
 
-    // Device type listener
+    // Device type change listener
     document.getElementById('nc-device-type').addEventListener('change', e => {
         document.getElementById('nc-device-new').style.display = e.target.value === 'new' ? 'block' : 'none';
     });
 
-    // Manufacturer listener
+    // Manufacturer change listener
     document.getElementById('nc-manu').addEventListener('change', e => {
         document.getElementById('nc-manu-new').style.display = e.target.value === 'new' ? 'block' : 'none';
     });
@@ -384,7 +389,6 @@ function showNodeCreator(x = 300, y = 300, isEdit = false) {
     }
 }
 
-// Close creator panel
 function closeNodeCreator() {
     if (currentCreatorPanel) {
         currentCreatorPanel.remove();
@@ -393,7 +397,7 @@ function closeNodeCreator() {
     editingType = null;
 }
 
-// Add port row to creator panel
+// Add port row
 function addPortRow(containerId, name = '', std = '') {
     const container = document.getElementById(containerId);
     const row = document.createElement('div');
@@ -422,24 +426,16 @@ async function saveNodeCreator() {
         return;
     }
 
-    const titleEl = document.getElementById('nc-title');
-    const categoryEl = document.getElementById('nc-device-type');
-    const manuEl = document.getElementById('nc-manu');
-    const manuNewEl = document.getElementById('nc-manu-new');
-    const ipEl = document.getElementById('nc-ipcapable');
-
-    let category = categoryEl.value;
+    const title = document.getElementById('nc-title').value.trim();
+    let category = document.getElementById('nc-device-type').value;
     if (category === 'new') {
         category = document.getElementById('nc-device-new').value.trim();
     }
-
-    let manufacturer = manuEl.value;
+    let manufacturer = document.getElementById('nc-manu').value;
     if (manufacturer === 'new') {
-        manufacturer = manuNewEl.value.trim();
+        manufacturer = document.getElementById('nc-manu-new').value.trim();
     }
-
-    const title = titleEl.value.trim();
-    const ipCapable = ipEl.checked;
+    const ipCapable = document.getElementById('nc-ipcapable').checked;
 
     if (!title || !category || !manufacturer) {
         alert("Title, Device Type, and Manufacturer are required.");
@@ -449,23 +445,17 @@ async function saveNodeCreator() {
     const name = `${category} - ${manufacturer} ${title}`;
     const key = `equipment/${name.replace(/\s+/g, '_')}`;
 
-    // Collect inputs
     const inputs = [];
     document.querySelectorAll('#nc-inputs > div').forEach(row => {
-        const portNameInput = row.querySelector('input');
-        const portTypeSelect = row.querySelector('select');
-        const portName = portNameInput.value.trim();
-        const portType = portTypeSelect.value;
+        const portName = row.querySelector('input').value.trim();
+        const portType = row.querySelector('select').value;
         if (portName && portType) inputs.push([`${portName} ${portType}`, portType]);
     });
 
-    // Collect outputs
     const outputs = [];
     document.querySelectorAll('#nc-outputs > div').forEach(row => {
-        const portNameInput = row.querySelector('input');
-        const portTypeSelect = row.querySelector('select');
-        const portName = portNameInput.value.trim();
-        const portType = portTypeSelect.value;
+        const portName = row.querySelector('input').value.trim();
+        const portType = row.querySelector('select').value;
         if (portName && portType) outputs.push([`${portName} ${portType}`, portType]);
     });
 
