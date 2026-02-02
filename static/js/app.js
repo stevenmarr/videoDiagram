@@ -1,94 +1,106 @@
-// Client-side JavaScript logic for the Video Flow Line Diagram Editor.
-// This handles the node editor, wizard, and report generation using LiteGraph.
+// static/js/app.js
+// Client-side JavaScript logic for the Video Flow Line Diagram Editor
+// Uses LiteGraph.js for node-based editor
 
-// Global variables
+// Globals
 let videoStandards = [];
 let graph;
-let editingType = null;  // For edit mode
-let instanceNode = null;  // For instance edit
+let editingType = null;           // Currently edited node type key
+let instanceNode = null;          // Currently edited instance node
 
-// Wait for DOM to load before initializing
-document.addEventListener('DOMContentLoaded', async function() {
-    // Fetch video standards from DB
+// Wait for DOM to load
+document.addEventListener('DOMContentLoaded', async function () {
+    // Fetch connection types (video standards) from database
     const standardsRes = await fetch('/api/connection_types');
     videoStandards = await standardsRes.json();
 
-    // Fetch and register persisted node types
+    // Fetch and register persisted custom node types from DB
     const nodeTypesRes = await fetch('/api/node_types');
     const persistedNodes = await nodeTypesRes.json();
     persistedNodes.forEach(({ key, spec }) => {
-        const nodeSpec = JSON.parse(spec);
-        function CustomEquipment() {
-            nodeSpec.inputs.forEach(([n, t]) => this.addInput(n, t));
-            nodeSpec.outputs.forEach(([n, t]) => this.addOutput(n, t));
-            this.properties = nodeSpec.properties;
+        try {
+            const nodeSpec = JSON.parse(spec);
+
+            function CustomEquipment() {
+                (nodeSpec.inputs || []).forEach(([n, t]) => this.addInput(n, t));
+                (nodeSpec.outputs || []).forEach(([n, t]) => this.addOutput(n, t));
+                this.properties = nodeSpec.properties || {};
+            }
+
+            CustomEquipment.title = nodeSpec.title || key.replace('equipment/', '');
+            CustomEquipment.prototype.onDrawBackground = function (ctx) { /* optional */ };
+
+            LiteGraph.registerNodeType(key, CustomEquipment);
+        } catch (e) {
+            console.error(`Failed to register persisted node type ${key}:`, e);
         }
-        CustomEquipment.title = nodeSpec.title;
-        CustomEquipment.prototype.onDrawBackground = function(ctx) {
-            // Optional
-        };
-        LiteGraph.registerNodeType(key, CustomEquipment);
     });
 
-    // Setup LiteGraph
+    // Initialize LiteGraph canvas
     const canvasEl = document.getElementById('mycanvas');
     const dpr = window.devicePixelRatio || 1;
-    const cssWidth = window.innerWidth - 200;
+    const cssWidth = window.innerWidth - 200;   // sidebar width
     const cssHeight = window.innerHeight * 0.8;
+
     canvasEl.width = cssWidth * dpr;
     canvasEl.height = cssHeight * dpr;
     canvasEl.style.width = cssWidth + 'px';
     canvasEl.style.height = cssHeight + 'px';
+
     graph = new LGraph();
     graph.config = { links_ontop: true };
     const canvas = new LGraphCanvas("#mycanvas", graph);
+
     canvas.ctx.scale(dpr, dpr);
     canvas.bgctx.scale(dpr, dpr);
     canvas.bgcanvas.width = canvasEl.width;
     canvas.bgcanvas.height = canvasEl.height;
+
     graph.start();
 
-    // Override connect for compatibility
+    // Prevent incompatible connections
     const originalConnect = LGraphNode.prototype.connect;
-    LGraphNode.prototype.connect = function(slot, targetNode, targetSlot) {
+    LGraphNode.prototype.connect = function (slot, targetNode, targetSlot) {
         const output = this.outputs[slot];
         const input = targetNode.inputs[targetSlot];
         if (output && input) {
-            const outputStd = videoStandards.find(s => s.name === output.type);
-            const inputStd = videoStandards.find(s => s.name === input.type);
-            if (outputStd && inputStd && outputStd.group !== inputStd.group) {
-                alert('Incompatible port types: ' + output.type + ' and ' + input.type);
+            const outStd = videoStandards.find(s => s.name === output.type);
+            const inStd = videoStandards.find(s => s.name === input.type);
+            if (outStd && inStd && outStd.group !== inStd.group) {
+                alert(`Cannot connect ${output.type} → ${input.type} (different families)`);
                 return false;
             }
         }
         return originalConnect.apply(this, arguments);
     };
 
-    // Override drawing for colored ports
+    // Custom port rendering (color circles)
     const originalDrawNode = LGraphCanvas.prototype.drawNode;
-    LGraphCanvas.prototype.drawNode = function(node, ctx) {
+    LGraphCanvas.prototype.drawNode = function (node, ctx) {
         originalDrawNode.apply(this, arguments);
+
         if (node.inputs) {
-            node.inputs.forEach((input, i) => {
+            node.inputs.forEach(input => {
                 if (input.pos && input.pos.length >= 2) {
                     const std = videoStandards.find(s => s.name === input.type);
                     if (std) {
                         ctx.fillStyle = std.color;
                         ctx.beginPath();
-                        ctx.arc(input.pos[0], input.pos[1], 5, 0, 2 * Math.PI);
+                        ctx.arc(input.pos[0], input.pos[1], 6, 0, Math.PI * 2);
                         ctx.fill();
                     }
                 }
             });
         }
+
         if (node.outputs) {
-            node.outputs.forEach((output, i) => {
+            node.outputs.forEach(output => {
                 if (output.pos && output.pos.length >= 2) {
                     const std = videoStandards.find(s => s.name === output.type);
                     if (std) {
                         ctx.fillStyle = std.color;
                         ctx.beginPath();
-                        ctx.arc(output.pos[0], output.pos[1], 5, 0, 2 * Math.PI);
+                        ctx.arc(output.pos[0], output.pos[1], 6, 0, Math.PI * 2);
                         ctx.fill();
                     }
                 }
@@ -96,46 +108,78 @@ document.addEventListener('DOMContentLoaded', async function() {
         }
     };
 
-    // Override link drawing for color
+    // Custom link color (matches source port)
     const originalDrawLink = LGraphCanvas.prototype.drawLink;
-    LGraphCanvas.prototype.drawLink = function(link, ctx) {
-        const output = link.origin_node.outputs[link.origin_slot];
-        if (output) {
-            const std = videoStandards.find(s => s.name === output.type);
-            if (std) {
-                ctx.strokeStyle = std.color;
-            }
+    LGraphCanvas.prototype.drawLink = function (link, ctx) {
+        const out = link.origin_node.outputs[link.origin_slot];
+        if (out) {
+            const std = videoStandards.find(s => s.name === out.type);
+            if (std) ctx.strokeStyle = std.color;
         }
-        originalDrawNode.apply(this, arguments);
+        originalDrawLink.apply(this, arguments);
         ctx.strokeStyle = LiteGraph.LINK_COLOR; // reset
     };
 
-    // Event listeners
-    document.getElementById('createNodeButton').addEventListener('click', () => openWizard('create'));
-    document.getElementById('generateReportButton').addEventListener('click', generateReport);
-
-    // Drag & drop from sidebar
-    canvasEl.addEventListener('drop', (e) => {
+    // Right-click context menu on canvas
+    canvas.canvas.addEventListener('contextmenu', function (e) {
         e.preventDefault();
-        const type = e.dataTransfer.getData('node-type');
-        if (type) {
-            addNodeInstance(type, e.clientX - 200, e.clientY);
-        }
+        e.stopPropagation();
+
+        const canvasX = canvas.canvasX;
+        const canvasY = canvas.canvasY;
+
+        const menuItems = [
+            {
+                title: "Add Node",
+                has_submenu: true,
+                submenu: {
+                    options: [
+                        {
+                            title: "Create new node",
+                            callback: () => openWizard('create')
+                        },
+                        {
+                            title: "Add existing node",
+                            has_submenu: true,
+                            submenu: {
+                                options: [
+                                    {
+                                        title: "By device type",
+                                        has_submenu: true,
+                                        submenu: buildByDeviceTypeMenu(canvasX, canvasY)
+                                    },
+                                    {
+                                        title: "By manufacturer",
+                                        has_submenu: true,
+                                        submenu: buildByManufacturerMenu(canvasX, canvasY)
+                                    },
+                                    {
+                                        title: "Recently added",
+                                        has_submenu: true,
+                                        submenu: buildRecentlyAddedMenu(canvasX, canvasY)
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            }
+        ];
+
+        new LiteGraph.ContextMenu(menuItems, {
+            event: e,
+            callback: null,
+            parentMenu: null
+        });
     });
-    canvasEl.addEventListener('dragover', (e) => e.preventDefault());
 
-    // Canvas right-click
-    canvas.showMenu = function(e) {
-        new LiteGraph.ContextMenu([{title: "Create New Node", callback: () => openWizard('create')}], {event: e});
-    };
-
-    // Instance right-click edit
-    canvas.onShowNodePanel = function(node, e) {
+    // Right-click on node → edit instance properties
+    canvas.onShowNodePanel = function (node) {
         openInstanceEdit(node);
     };
 
-    // Sidebar right-click edit
-    document.getElementById('nodeList').addEventListener('contextmenu', (e) => {
+    // Right-click on sidebar item → edit node type
+    document.getElementById('nodeList').addEventListener('contextmenu', e => {
         if (e.target.tagName === 'LI') {
             editingType = e.target.dataset.type;
             openWizard('edit', editingType);
@@ -143,179 +187,282 @@ document.addEventListener('DOMContentLoaded', async function() {
         }
     });
 
-    // Initial sidebar update
+    // Initial sidebar population
     updateSidebar();
 });
 
-// Update sidebar
-function updateSidebar() {
-    const nodeList = document.getElementById('nodeList');
-    nodeList.innerHTML = '';
+// Build "By device type" submenu
+function buildByDeviceTypeMenu(x, y) {
     const groups = {};
-    Object.keys(LiteGraph.registered_node_types).forEach(type => {
-        if (type.startsWith('equipment/')) {
-            const nodeClass = LiteGraph.registered_node_types[type];
-            const eqType = nodeClass.properties?.equipmentType || 'Uncategorized';
-            if (!groups[eqType]) groups[eqType] = [];
-            const li = document.createElement('li');
-            li.textContent = nodeClass.title;
-            li.draggable = true;
-            li.dataset.type = type;
-            li.addEventListener('dragstart', (e) => e.dataTransfer.setData('node-type', type));
-            groups[eqType].push(li);
-        }
+    Object.keys(LiteGraph.registered_node_types).forEach(key => {
+        if (!key.startsWith('equipment/')) return;
+        const nodeClass = LiteGraph.registered_node_types[key];
+        const category = nodeClass.properties?.equipmentType || 'Other';
+        if (!groups[category]) groups[category] = [];
+        groups[category].push({
+            title: nodeClass.title,
+            callback: () => addNodeInstance(key, x, y)
+        });
     });
-    Object.keys(groups).sort().forEach(group => {
+
+    const options = [];
+    Object.keys(groups).sort().forEach(cat => {
+        options.push({
+            title: cat,
+            has_submenu: true,
+            submenu: { options: groups[cat] }
+        });
+    });
+
+    return { options: options.length ? options : [{ title: "(No nodes yet)", disabled: true }] };
+}
+
+// Build "By manufacturer" submenu
+function buildByManufacturerMenu(x, y) {
+    const groups = {};
+    Object.keys(LiteGraph.registered_node_types).forEach(key => {
+        if (!key.startsWith('equipment/')) return;
+        const nodeClass = LiteGraph.registered_node_types[key];
+        const manu = nodeClass.properties?.manufacturer || 'Unknown';
+        if (!groups[manu]) groups[manu] = [];
+        groups[manu].push({
+            title: nodeClass.title,
+            callback: () => addNodeInstance(key, x, y)
+        });
+    });
+
+    const options = [];
+    Object.keys(groups).sort().forEach(manu => {
+        options.push({
+            title: manu,
+            has_submenu: true,
+            submenu: { options: groups[manu] }
+        });
+    });
+
+    return { options: options.length ? options : [{ title: "(No nodes yet)", disabled: true }] };
+}
+
+// Build "Recently added" submenu (simple last-in-first-out approximation)
+function buildRecentlyAddedMenu(x, y) {
+    const recent = [];
+    const allKeys = Object.keys(LiteGraph.registered_node_types)
+        .filter(k => k.startsWith('equipment/'))
+        .slice(-10)   // last 10
+        .reverse();   // most recent first
+
+    allKeys.forEach(key => {
+        const nodeClass = LiteGraph.registered_node_types[key];
+        recent.push({
+            title: nodeClass.title,
+            callback: () => addNodeInstance(key, x, y)
+        });
+    });
+
+    return { options: recent.length ? recent : [{ title: "(No recent nodes)", disabled: true }] };
+}
+
+// Refresh sidebar (grouped by equipment type)
+function updateSidebar() {
+    const list = document.getElementById('nodeList');
+    list.innerHTML = '';
+
+    const groups = {};
+    Object.keys(LiteGraph.registered_node_types).forEach(key => {
+        if (!key.startsWith('equipment/')) return;
+        const nodeClass = LiteGraph.registered_node_types[key];
+        const cat = nodeClass.properties?.equipmentType || 'Uncategorized';
+        if (!groups[cat]) groups[cat] = [];
+        const li = document.createElement('li');
+        li.textContent = nodeClass.title;
+        li.draggable = true;
+        li.dataset.type = key;
+        li.addEventListener('dragstart', e => e.dataTransfer.setData('node-type', key));
+        groups[cat].push(li);
+    });
+
+    Object.keys(groups).sort().forEach(cat => {
         const header = document.createElement('strong');
-        header.textContent = group;
+        header.textContent = cat;
         header.style.display = 'block';
         header.style.margin = '10px 0 5px 10px';
-        nodeList.appendChild(header);
-        groups[group].forEach(li => nodeList.appendChild(li));
+        list.appendChild(header);
+        groups[cat].forEach(li => list.appendChild(li));
     });
 }
 
-// Open wizard
-async function openWizard(mode, type = null) {
-    editingType = type;
+// Open wizard (create or edit mode)
+async function openWizard(mode, typeKey = null) {
+    editingType = typeKey;
     document.getElementById('wizardModal').style.display = 'block';
     document.getElementById('inputsList').innerHTML = '';
     document.getElementById('outputsList').innerHTML = '';
     document.getElementById('nodeForm').reset();
 
-    // Manufacturer dropdown
+    // Manufacturer dropdown from DB
     const manuSelect = document.getElementById('manufacturer');
     manuSelect.innerHTML = '<option value="new">Add New Manufacturer</option>';
-    const manuRes = await fetch('/api/manufacturers');
-    const manufacturers = await manuRes.json();
-    manufacturers.forEach(m => {
+    const res = await fetch('/api/manufacturers');
+    const mans = await res.json();
+    mans.forEach(m => {
         const opt = document.createElement('option');
         opt.value = m;
         opt.textContent = m;
         manuSelect.appendChild(opt);
     });
 
-    if (mode === 'edit' && type) {
-        const nodeClass = LiteGraph.registered_node_types[type];
-        if (nodeClass) {
+    if (mode === 'edit' && typeKey) {
+        const nodeClass = LiteGraph.registered_node_types[typeKey];
+        if (nodeClass?.properties) {
             document.getElementById('equipmentType').value = nodeClass.properties.equipmentType || '';
-            document.getElementById('manufacturer').value = nodeClass.properties.manufacturer || '';
-            document.getElementById('model').value = nodeClass.properties.model || '';
-            document.getElementById('ipCapable').checked = nodeClass.properties.ipCapable || false;
-            nodeClass.prototype.inputs.forEach(([n, t]) => addDynamicField('inputs', n.split(' ')[0], t));
-            nodeClass.prototype.outputs.forEach(([n, t]) => addDynamicField('outputs', n.split(' ')[0], t));
+            document.getElementById('manufacturer').value   = nodeClass.properties.manufacturer   || '';
+            document.getElementById('model').value          = nodeClass.properties.model          || '';
+            document.getElementById('ipCapable').checked    = !!nodeClass.properties.ipCapable;
+
+            (nodeClass.prototype.inputs || []).forEach(([n, t]) => {
+                const namePart = n.split(' ')[0];
+                addDynamicField('inputs', namePart, t);
+            });
+            (nodeClass.prototype.outputs || []).forEach(([n, t]) => {
+                const namePart = n.split(' ')[0];
+                addDynamicField('outputs', namePart, t);
+            });
         }
     }
 }
 
 function closeWizard() {
     document.getElementById('wizardModal').style.display = 'none';
+    editingType = null;
 }
 
+// Add port row
 function addDynamicField(type, name = '', std = '') {
     const list = document.getElementById(type + 'List');
-    const item = document.createElement('div');
-    item.className = 'dynamic-item';
-    item.innerHTML = `
-        <input type="text" placeholder="Port Name (e.g., Input 1)" class="portName" value="${name}" required>
+    const div = document.createElement('div');
+    div.className = 'dynamic-item';
+    div.innerHTML = `
+        <input type="text" class="portName" placeholder="e.g. Input 1" value="${name}" required>
         <select class="portType" required>
-            <option value="">Select Video Standard</option>
+            <option value="">Select</option>
             ${videoStandards.map(s => `<option value="${s.name}" ${s.name === std ? 'selected' : ''}>${s.name}</option>`).join('')}
         </select>
         <button type="button" onclick="duplicatePort(this.parentElement, '${type}')">Duplicate</button>
     `;
-    list.appendChild(item);
+    list.appendChild(div);
 }
 
+// Duplicate port with auto-incremented ID
 function duplicatePort(item, type) {
-    const portName = item.querySelector('.portName').value;
-    const portType = item.querySelector('.portType').value;
-    if (portName && portType) {
-        const idMatch = portName.match(/\d+$/);
-        const base = portName.replace(/\d+$/, '').trim();
-        const nextId = idMatch ? parseInt(idMatch[0]) + 1 : 2;
-        addDynamicField(type, `${base} ${nextId}`, portType);
-    } else {
-        alert('Fill name and type before duplicating.');
+    const nameInput = item.querySelector('.portName');
+    const typeSelect = item.querySelector('.portType');
+
+    let name = nameInput.value.trim();
+    if (!name) {
+        alert("Fill port name first.");
+        return;
     }
+
+    const idMatch = name.match(/(\d+)$/);
+    const base = name.replace(/\d+$/, '').trim();
+    const nextId = idMatch ? parseInt(idMatch[1]) + 1 : 2;
+
+    addDynamicField(type, `${base}${nextId}`, typeSelect.value);
 }
 
+// Create or edit node type
 async function createOrEditNodeType() {
-    const equipmentType = document.getElementById('equipmentType').value;
-    let manufacturer = document.getElementById('manufacturer').value;
-    if (manufacturer === 'new') {
-        manufacturer = document.getElementById('customManufacturer').value;
+    const eqType = document.getElementById('equipmentType').value.trim();
+    let manu = document.getElementById('manufacturer').value;
+    if (manu === 'new') {
+        manu = document.getElementById('customManufacturer').value.trim();
     }
-    const model = document.getElementById('model').value;
+    const mdl = document.getElementById('model').value.trim();
     const ipCapable = document.getElementById('ipCapable').checked;
-    const name = `${equipmentType} - ${manufacturer} ${model}`;
-    const typeKey = "equipment/" + name.replace(/\s/g, '_');
+
+    if (!eqType || !manu || !mdl) {
+        alert("Equipment Type, Manufacturer, and Model are required.");
+        return;
+    }
+
+    const title = `${eqType} - ${manu} ${mdl}`;
+    const key = `equipment/${title.replace(/\s+/g, '_')}`;
 
     const inputs = [];
-    document.querySelectorAll('#inputsList .dynamic-item').forEach(item => {
-        const portName = item.querySelector('.portName').value;
-        const portType = item.querySelector('.portType').value;
-        if (portName && portType) {
-            inputs.push([`${portName} ${portType}`, portType]);
-        }
+    document.querySelectorAll('#inputsList .dynamic-item').forEach(div => {
+        const name = div.querySelector('.portName').value.trim();
+        const typ = div.querySelector('.portType').value;
+        if (name && typ) inputs.push([`${name} ${typ}`, typ]);
     });
 
     const outputs = [];
-    document.querySelectorAll('#outputsList .dynamic-item').forEach(item => {
-        const portName = item.querySelector('.portName').value;
-        const portType = item.querySelector('.portType').value;
-        if (portName && portType) {
-            outputs.push([`${portName} ${portType}`, portType]);
-        }
+    document.querySelectorAll('#outputsList .dynamic-item').forEach(div => {
+        const name = div.querySelector('.portName').value.trim();
+        const typ = div.querySelector('.portType').value;
+        if (name && typ) outputs.push([`${name} ${typ}`, typ]);
     });
 
     function CustomEquipment() {
         inputs.forEach(([n, t]) => this.addInput(n, t));
         outputs.forEach(([n, t]) => this.addOutput(n, t));
-        this.properties = { equipmentType, manufacturer, model, ipCapable, deviceId: '', ipAddress: '' };
+        this.properties = {
+            equipmentType: eqType,
+            manufacturer: manu,
+            model: mdl,
+            ipCapable,
+            deviceId: '',
+            ipAddress: ''
+        };
     }
-    CustomEquipment.title = name;
-    CustomEquipment.prototype.onDrawBackground = function(ctx) {
-        // Optional
-    };
+    CustomEquipment.title = title;
+    CustomEquipment.prototype.onDrawBackground = function (ctx) { };
 
-    if (editingType) {
+    if (editingType && LiteGraph.registered_node_types[editingType]) {
         LiteGraph.unregisterNodeType(editingType);
     }
 
-    LiteGraph.registerNodeType(typeKey, CustomEquipment);
+    LiteGraph.registerNodeType(key, CustomEquipment);
 
-    // Save to DB
-    const spec = JSON.stringify({ title: name, inputs, outputs, properties: { equipmentType, manufacturer, model, ipCapable } });
+    // Persist to database
+    const specObj = {
+        title,
+        inputs,
+        outputs,
+        properties: { equipmentType: eqType, manufacturer: manu, model: mdl, ipCapable }
+    };
     await fetch('/api/add_node_type', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: `key=${encodeURIComponent(typeKey)}&spec=${encodeURIComponent(spec)}`
+        body: `key=${encodeURIComponent(key)}&spec=${encodeURIComponent(JSON.stringify(specObj))}`
     });
 
     updateSidebar();
     closeWizard();
-    alert('New node type "' + name + '" created! Search for it in the editor to add instances.');
+    alert(`Node type "${title}" ${editingType ? 'updated' : 'created'} successfully.`);
 }
 
-// Add node instance with unique ID
-function addNodeInstance(type, x, y) {
-    const node = LiteGraph.createNode(type);
-    const baseTitle = node.title.replace(/\ \d+$/, '');
-    const existing = graph.findNodesByTitle(baseTitle);
-    const count = existing.length + 1;
-    node.title = baseTitle + ' ' + count;
+// Create instance with incremental ID
+function addNodeInstance(typeKey, x, y) {
+    const node = LiteGraph.createNode(typeKey);
+    if (!node) return;
+
+    const base = node.title.replace(/\s+\d+$/, '');
+    const sameType = graph._nodes.filter(n => n.title.startsWith(base));
+    const nextId = sameType.length + 1;
+
+    node.title = base + (nextId > 1 ? ' ' + nextId : '');
     node.pos = [x, y];
     graph.add(node);
 }
 
-// Open instance edit
+// Instance edit modal
 function openInstanceEdit(node) {
     instanceNode = node;
     document.getElementById('instanceEditModal').style.display = 'block';
     document.getElementById('deviceId').value = node.properties.deviceId || '';
-    document.getElementById('ipAddress').value = node.properties.ipAddress || '';
-    document.getElementById('ipAddress').disabled = !node.properties.ipCapable;
+    const ip = document.getElementById('ipAddress');
+    ip.value = node.properties.ipAddress || '';
+    ip.disabled = !node.properties.ipCapable;
 }
 
 function closeInstanceEdit() {
@@ -323,60 +470,53 @@ function closeInstanceEdit() {
 }
 
 function saveInstanceEdit() {
-    instanceNode.properties.deviceId = document.getElementById('deviceId').value;
-    if (instanceNode.properties.ipCapable) {
-        instanceNode.properties.ipAddress = document.getElementById('ipAddress').value;
+    if (instanceNode) {
+        instanceNode.properties.deviceId = document.getElementById('deviceId').value.trim();
+        if (instanceNode.properties.ipCapable) {
+            instanceNode.properties.ipAddress = document.getElementById('ipAddress').value.trim();
+        }
+        closeInstanceEdit();
     }
-    closeInstanceEdit();
 }
 
-// Generate Report
+// Generate report
 function generateReport() {
-    var data = graph.serialize();
-    var reportDiv = document.getElementById('report');
+    const data = graph.serialize();
+    const reportDiv = document.getElementById('report');
     reportDiv.innerHTML = '';
     reportDiv.style.display = 'block';
 
-    // Inventory Summary
-    const inventory = {};
-    data.nodes.forEach(node => {
-        const key = `${node.properties.equipmentType} - ${node.properties.manufacturer} ${node.properties.model}`;
-        if (!inventory[key]) {
-            inventory[key] = 0;
-        }
-        inventory[key]++;
+    // Inventory summary
+    const counts = {};
+    data.nodes.forEach(n => {
+        const key = `${n.properties.equipmentType} - ${n.properties.manufacturer} ${n.properties.model}`;
+        counts[key] = (counts[key] || 0) + 1;
     });
-    var inventoryHtml = '<h2>Inventory List</h2><table border="1"><tr><th>Type</th><th>Manufacturer</th><th>Model</th><th>Count</th></tr>';
-    Object.keys(inventory).forEach(key => {
-        const [type, manuModel] = key.split(' - ');
-        const [manu, model] = manuModel.split(' ');
-        inventoryHtml += `<tr>
-            <td>${type}</td>
-            <td>${manu}</td>
-            <td>${model}</td>
-            <td>${inventory[key]}</td>
-        </tr>`;
-    });
-    inventoryHtml += '</table>';
 
-    // Connection Tables
-    var connectionsHtml = '<h2>Input/Output Connections</h2><table border="1"><tr><th>From Equipment</th><th>Output Port</th><th>To Equipment</th><th>Input Port</th></tr>';
+    let invHtml = '<h2>Inventory</h2><table border="1"><tr><th>Type</th><th>Manufacturer</th><th>Model</th><th>Count</th></tr>';
+    Object.entries(counts).forEach(([key, cnt]) => {
+        const [type, rest] = key.split(' - ');
+        const [manu, model] = rest.split(' ');
+        invHtml += `<tr><td>${type}</td><td>${manu}</td><td>${model}</td><td>${cnt}</td></tr>`;
+    });
+    invHtml += '</table>';
+
+    // Connections
+    let connHtml = '<h2>Connections</h2><table border="1"><tr><th>From</th><th>Output</th><th>To</th><th>Input</th></tr>';
     data.links.forEach(link => {
-        var [, fromId, fromSlot, toId, toSlot] = link;
-        var fromNode = data.nodes.find(n => n.id === fromId);
-        var toNode = data.nodes.find(n => n.id === toId);
-        var fromLabel = `${fromNode.properties.manufacturer} - ${fromNode.properties.model} - ID ${fromId}`;
-        var toLabel = `${toNode.properties.manufacturer} - ${toNode.properties.model} - ID ${toId}`;
-        var outputName = fromNode.outputs[fromSlot].name;
-        var inputName = toNode.inputs[toSlot].name;
-        connectionsHtml += `<tr>
+        const [, fromId, fromSlot, toId, toSlot] = link;
+        const from = data.nodes.find(n => n.id === fromId);
+        const to = data.nodes.find(n => n.id === toId);
+        const fromLabel = `${from.properties.manufacturer} - ${from.properties.model} - ID ${fromId}`;
+        const toLabel = `${to.properties.manufacturer} - ${to.properties.model} - ID ${toId}`;
+        connHtml += `<tr>
             <td>${fromLabel}</td>
-            <td>${outputName}</td>
+            <td>${from.outputs[fromSlot]?.name || '?'}</td>
             <td>${toLabel}</td>
-            <td>${inputName}</td>
+            <td>${to.inputs[toSlot]?.name || '?'}</td>
         </tr>`;
     });
-    connectionsHtml += '</table>';
+    connHtml += '</table>';
 
-    reportDiv.innerHTML = inventoryHtml + connectionsHtml;
+    reportDiv.innerHTML = invHtml + connHtml;
 }
