@@ -1,106 +1,99 @@
-// static/js/app.js
-// Client-side JavaScript logic for the Video Flow Line Diagram Editor
-// Uses LiteGraph.js for node-based editor
+// Client-side JavaScript logic for the Video Flow Line Diagram Editor.
+// This handles the node editor, wizard, and report generation using LiteGraph.
 
-// Globals
+// Global variables
 let videoStandards = [];
 let graph;
-let editingType = null;           // Currently edited node type key
-let instanceNode = null;          // Currently edited instance node
+let editingType = null;  // Currently edited node type key
+let instanceNode = null;  // Currently edited instance node
+let currentCreatorPanel = null;  // Floating creator panel reference
 
-// Wait for DOM to load
-document.addEventListener('DOMContentLoaded', async function () {
-    // Fetch connection types (video standards) from database
+// Wait for DOM to load before initializing
+document.addEventListener('DOMContentLoaded', async function() {
+    // Fetch video standards from DB
     const standardsRes = await fetch('/api/connection_types');
     videoStandards = await standardsRes.json();
 
-    // Fetch and register persisted custom node types from DB
+    // Fetch and register persisted node types from DB
     const nodeTypesRes = await fetch('/api/node_types');
     const persistedNodes = await nodeTypesRes.json();
     persistedNodes.forEach(({ key, spec }) => {
         try {
             const nodeSpec = JSON.parse(spec);
-
             function CustomEquipment() {
-                (nodeSpec.inputs || []).forEach(([n, t]) => this.addInput(n, t));
-                (nodeSpec.outputs || []).forEach(([n, t]) => this.addOutput(n, t));
-                this.properties = nodeSpec.properties || {};
+                nodeSpec.inputs.forEach(([n, t]) => this.addInput(n, t));
+                nodeSpec.outputs.forEach(([n, t]) => this.addOutput(n, t));
+                this.properties = nodeSpec.properties;
             }
-
-            CustomEquipment.title = nodeSpec.title || key.replace('equipment/', '');
-            CustomEquipment.prototype.onDrawBackground = function (ctx) { /* optional */ };
-
+            CustomEquipment.title = nodeSpec.title;
+            CustomEquipment.prototype.onDrawBackground = function(ctx) {
+                // Optional: Custom rendering
+            };
             LiteGraph.registerNodeType(key, CustomEquipment);
         } catch (e) {
-            console.error(`Failed to register persisted node type ${key}:`, e);
+            console.error(`Failed to register node type ${key}:`, e);
         }
     });
 
-    // Initialize LiteGraph canvas
+    // Setup LiteGraph
     const canvasEl = document.getElementById('mycanvas');
     const dpr = window.devicePixelRatio || 1;
-    const cssWidth = window.innerWidth - 200;   // sidebar width
+    const cssWidth = window.innerWidth - 200;
     const cssHeight = window.innerHeight * 0.8;
-
     canvasEl.width = cssWidth * dpr;
     canvasEl.height = cssHeight * dpr;
     canvasEl.style.width = cssWidth + 'px';
     canvasEl.style.height = cssHeight + 'px';
-
     graph = new LGraph();
     graph.config = { links_ontop: true };
     const canvas = new LGraphCanvas("#mycanvas", graph);
-
     canvas.ctx.scale(dpr, dpr);
     canvas.bgctx.scale(dpr, dpr);
     canvas.bgcanvas.width = canvasEl.width;
     canvas.bgcanvas.height = canvasEl.height;
-
     graph.start();
 
-    // Prevent incompatible connections
+    // Override connect to check compatibility
     const originalConnect = LGraphNode.prototype.connect;
-    LGraphNode.prototype.connect = function (slot, targetNode, targetSlot) {
+    LGraphNode.prototype.connect = function(slot, targetNode, targetSlot) {
         const output = this.outputs[slot];
         const input = targetNode.inputs[targetSlot];
         if (output && input) {
-            const outStd = videoStandards.find(s => s.name === output.type);
-            const inStd = videoStandards.find(s => s.name === input.type);
-            if (outStd && inStd && outStd.group !== inStd.group) {
-                alert(`Cannot connect ${output.type} → ${input.type} (different families)`);
+            const outputStd = videoStandards.find(s => s.name === output.type);
+            const inputStd = videoStandards.find(s => s.name === input.type);
+            if (outputStd && inputStd && outputStd.group !== inputStd.group) {
+                alert('Incompatible port types: ' + output.type + ' and ' + input.type);
                 return false;
             }
         }
         return originalConnect.apply(this, arguments);
     };
 
-    // Custom port rendering (color circles)
+    // Override drawing to color ports
     const originalDrawNode = LGraphCanvas.prototype.drawNode;
-    LGraphCanvas.prototype.drawNode = function (node, ctx) {
+    LGraphCanvas.prototype.drawNode = function(node, ctx) {
         originalDrawNode.apply(this, arguments);
-
         if (node.inputs) {
-            node.inputs.forEach(input => {
+            node.inputs.forEach((input, i) => {
                 if (input.pos && input.pos.length >= 2) {
                     const std = videoStandards.find(s => s.name === input.type);
                     if (std) {
                         ctx.fillStyle = std.color;
                         ctx.beginPath();
-                        ctx.arc(input.pos[0], input.pos[1], 6, 0, Math.PI * 2);
+                        ctx.arc(input.pos[0], input.pos[1], 5, 0, 2 * Math.PI);
                         ctx.fill();
                     }
                 }
             });
         }
-
         if (node.outputs) {
-            node.outputs.forEach(output => {
+            node.outputs.forEach((output, i) => {
                 if (output.pos && output.pos.length >= 2) {
                     const std = videoStandards.find(s => s.name === output.type);
                     if (std) {
                         ctx.fillStyle = std.color;
                         ctx.beginPath();
-                        ctx.arc(output.pos[0], output.pos[1], 6, 0, Math.PI * 2);
+                        ctx.arc(output.pos[0], output.pos[1], 5, 0, 2 * Math.PI);
                         ctx.fill();
                     }
                 }
@@ -108,20 +101,36 @@ document.addEventListener('DOMContentLoaded', async function () {
         }
     };
 
-    // Custom link color (matches source port)
+    // Override link drawing for color
     const originalDrawLink = LGraphCanvas.prototype.drawLink;
-    LGraphCanvas.prototype.drawLink = function (link, ctx) {
-        const out = link.origin_node.outputs[link.origin_slot];
-        if (out) {
-            const std = videoStandards.find(s => s.name === out.type);
-            if (std) ctx.strokeStyle = std.color;
+    LGraphCanvas.prototype.drawLink = function(link, ctx) {
+        const output = link.origin_node.outputs[link.origin_slot];
+        if (output) {
+            const std = videoStandards.find(s => s.name === output.type);
+            if (std) {
+                ctx.strokeStyle = std.color;
+            }
         }
         originalDrawLink.apply(this, arguments);
         ctx.strokeStyle = LiteGraph.LINK_COLOR; // reset
     };
 
-    // Right-click context menu on canvas
-    canvas.canvas.addEventListener('contextmenu', function (e) {
+    // Event listeners for buttons
+    document.getElementById('createNodeButton').addEventListener('click', () => openWizard('create'));
+    document.getElementById('generateReportButton').addEventListener('click', generateReport);
+
+    // Drag & drop from sidebar
+    canvasEl.addEventListener('drop', (e) => {
+        e.preventDefault();
+        const type = e.dataTransfer.getData('node-type');
+        if (type) {
+            addNodeInstance(type, e.clientX - 200, e.clientY);
+        }
+    });
+    canvasEl.addEventListener('dragover', (e) => e.preventDefault());
+
+    // Canvas right-click menu
+    canvas.canvas.addEventListener('contextmenu', function(e) {
         e.preventDefault();
         e.stopPropagation();
 
@@ -136,7 +145,7 @@ document.addEventListener('DOMContentLoaded', async function () {
                     options: [
                         {
                             title: "Create new node",
-                            callback: () => openWizard('create')
+                            callback: () => showNodeCreator(canvasX, canvasY, false)
                         },
                         {
                             title: "Add existing node",
@@ -173,21 +182,21 @@ document.addEventListener('DOMContentLoaded', async function () {
         });
     });
 
-    // Right-click on node → edit instance properties
-    canvas.onShowNodePanel = function (node) {
+    // Node right-click for instance edit
+    canvas.onShowNodePanel = function (node, e) {
         openInstanceEdit(node);
     };
 
-    // Right-click on sidebar item → edit node type
-    document.getElementById('nodeList').addEventListener('contextmenu', e => {
+    // Sidebar right-click for type edit
+    document.getElementById('nodeList').addEventListener('contextmenu', (e) => {
         if (e.target.tagName === 'LI') {
             editingType = e.target.dataset.type;
-            openWizard('edit', editingType);
+            showNodeCreator(null, null, true); // edit mode
             e.preventDefault();
         }
     });
 
-    // Initial sidebar population
+    // Initial sidebar
     updateSidebar();
 });
 
@@ -243,15 +252,15 @@ function buildByManufacturerMenu(x, y) {
     return { options: options.length ? options : [{ title: "(No nodes yet)", disabled: true }] };
 }
 
-// Build "Recently added" submenu (simple last-in-first-out approximation)
+// Build "Recently added" submenu
 function buildRecentlyAddedMenu(x, y) {
     const recent = [];
-    const allKeys = Object.keys(LiteGraph.registered_node_types)
+    const keys = Object.keys(LiteGraph.registered_node_types)
         .filter(k => k.startsWith('equipment/'))
-        .slice(-10)   // last 10
-        .reverse();   // most recent first
+        .slice(-10)
+        .reverse();
 
-    allKeys.forEach(key => {
+    keys.forEach(key => {
         const nodeClass = LiteGraph.registered_node_types[key];
         recent.push({
             title: nodeClass.title,
@@ -262,7 +271,7 @@ function buildRecentlyAddedMenu(x, y) {
     return { options: recent.length ? recent : [{ title: "(No recent nodes)", disabled: true }] };
 }
 
-// Refresh sidebar (grouped by equipment type)
+// Update sidebar (grouped by equipment type)
 function updateSidebar() {
     const list = document.getElementById('nodeList');
     list.innerHTML = '';
@@ -277,7 +286,7 @@ function updateSidebar() {
         li.textContent = nodeClass.title;
         li.draggable = true;
         li.dataset.type = key;
-        li.addEventListener('dragstart', e => e.dataTransfer.setData('node-type', key));
+        li.addEventListener('dragstart', (e) => e.dataTransfer.setData('node-type', key));
         groups[cat].push(li);
     });
 
@@ -291,178 +300,251 @@ function updateSidebar() {
     });
 }
 
-// Open wizard (create or edit mode)
-async function openWizard(mode, typeKey = null) {
-    editingType = typeKey;
-    document.getElementById('wizardModal').style.display = 'block';
-    document.getElementById('inputsList').innerHTML = '';
-    document.getElementById('outputsList').innerHTML = '';
-    document.getElementById('nodeForm').reset();
+// Show floating node creator panel
+function showNodeCreator(x = 300, y = 300, isEdit = false) {
+    if (currentCreatorPanel) {
+        currentCreatorPanel.remove();
+    }
 
-    // Manufacturer dropdown from DB
-    const manuSelect = document.getElementById('manufacturer');
-    manuSelect.innerHTML = '<option value="new">Add New Manufacturer</option>';
-    const res = await fetch('/api/manufacturers');
-    const mans = await res.json();
-    mans.forEach(m => {
-        const opt = document.createElement('option');
-        opt.value = m;
-        opt.textContent = m;
-        manuSelect.appendChild(opt);
+    currentCreatorPanel = document.createElement('div');
+    currentCreatorPanel.style.position = 'absolute';
+    currentCreatorPanel.style.left = `${x}px`;
+    currentCreatorPanel.style.top = `${y}px`;
+    currentCreatorPanel.style.background = '#222';
+    currentCreatorPanel.style.color = 'white';
+    currentCreatorPanel.style.padding = '15px';
+    currentCreatorPanel.style.border = '1px solid #555';
+    currentCreatorPanel.style.zIndex = '1000';
+    currentCreatorPanel.style.minWidth = '380px';
+    currentCreatorPanel.style.boxShadow = '0 0 20px rgba(0,0,0,0.7)';
+    currentCreatorPanel.innerHTML = `
+        <h3>${isEdit ? 'Edit Node Type' : 'Create New Node Type'}</h3>
+        <label>Device Type:</label><br>
+        <select id="nc-device-type" style="width:100%; margin:5px 0;">
+            <option value="new">Add new device type...</option>
+            <option value="Hi Res Switcher">Hi Res Switcher</option>
+            <option value="Video Switcher">Video Switcher</option>
+            <option value="Convertor">Convertor</option>
+        </select>
+        <input id="nc-device-new" type="text" placeholder="New device type name" style="width:100%; margin:5px 0; display:none;"><br><br>
+
+        <label>Manufacturer:</label><br>
+        <select id="nc-manu" style="width:100%; margin:5px 0;">
+            <option value="new">Add new manufacturer...</option>
+            <option value="Barco">Barco</option>
+            <option value="BlackMagic">BlackMagic</option>
+            <option value="Decimator">Decimator</option>
+        </select>
+        <input id="nc-manu-new" type="text" placeholder="New manufacturer name" style="width:100%; margin:5px 0; display:none;"><br><br>
+
+        <label>Model:</label><br>
+        <input id="nc-title" type="text" placeholder="e.g. ATEM Constellation 8K" style="width:100%; margin:5px 0;"><br><br>
+
+        <label>IP Capable:</label>
+        <input id="nc-ipcapable" type="checkbox" style="margin-left:10px;"><br><br>
+
+        <h4>Inputs</h4>
+        <div id="nc-inputs"></div>
+        <button onclick="addPortToCreator('input')">+ Add Input</button><br><br>
+
+        <h4>Outputs</h4>
+        <div id="nc-outputs"></div>
+        <button onclick="addPortToCreator('output')">+ Add Output</button><br><br>
+
+        <button onclick="saveNodeCreator()" style="padding:8px 16px; background:#4CAF50; border:none; color:white; cursor:pointer;">Save Node Type</button>
+        <button onclick="closeNodeCreator()" style="padding:8px 16px; margin-left:10px; background:#f44336; border:none; color:white; cursor:pointer;">Cancel</button>
+    `;
+
+    document.body.appendChild(currentCreatorPanel);
+
+    // Device type change listener
+    document.getElementById('nc-device-type').addEventListener('change', e => {
+        document.getElementById('nc-device-new').style.display = e.target.value === 'new' ? 'block' : 'none';
     });
 
-    if (mode === 'edit' && typeKey) {
-        const nodeClass = LiteGraph.registered_node_types[typeKey];
-        if (nodeClass?.properties) {
-            document.getElementById('equipmentType').value = nodeClass.properties.equipmentType || '';
-            document.getElementById('manufacturer').value   = nodeClass.properties.manufacturer   || '';
-            document.getElementById('model').value          = nodeClass.properties.model          || '';
-            document.getElementById('ipCapable').checked    = !!nodeClass.properties.ipCapable;
+    // Manufacturer change listener
+    document.getElementById('nc-manu').addEventListener('change', e => {
+        document.getElementById('nc-manu-new').style.display = e.target.value === 'new' ? 'block' : 'none';
+    });
 
-            (nodeClass.prototype.inputs || []).forEach(([n, t]) => {
-                const namePart = n.split(' ')[0];
-                addDynamicField('inputs', namePart, t);
-            });
-            (nodeClass.prototype.outputs || []).forEach(([n, t]) => {
-                const namePart = n.split(' ')[0];
-                addDynamicField('outputs', namePart, t);
-            });
+    // Pre-fill if editing
+    if (isEdit && editingType) {
+        const cls = LiteGraph.registered_node_types[editingType];
+        if (cls && cls.properties) {
+            document.getElementById('nc-title').value = cls.properties.model || '';
+            document.getElementById('nc-device-type').value = cls.properties.equipmentType || '';
+            document.getElementById('nc-manu').value = cls.properties.manufacturer || '';
+            document.getElementById('nc-ipcapable').checked = !!cls.properties.ipCapable;
+
+            (cls.prototype.inputs || []).forEach(([n, t]) => addPortRow('nc-inputs', n.split(' ')[0], t));
+            (cls.prototype.outputs || []).forEach(([n, t]) => addPortRow('nc-outputs', n.split(' ')[0], t));
         }
     }
 }
 
-function closeWizard() {
-    document.getElementById('wizardModal').style.display = 'none';
+function closeNodeCreator() {
+    if (currentCreatorPanel) {
+        currentCreatorPanel.remove();
+        currentCreatorPanel = null;
+    }
     editingType = null;
 }
 
-// Add port row
-function addDynamicField(type, name = '', std = '') {
-    const list = document.getElementById(type + 'List');
-    const div = document.createElement('div');
-    div.className = 'dynamic-item';
-    div.innerHTML = `
-        <input type="text" class="portName" placeholder="e.g. Input 1" value="${name}" required>
-        <select class="portType" required>
-            <option value="">Select</option>
+// Add port row to creator panel
+function addPortRow(containerId, name = '', std = '') {
+    const container = document.getElementById(containerId);
+    const row = document.createElement('div');
+    row.style.margin = '6px 0';
+    row.innerHTML = `
+        <input type="text" value="${name}" placeholder="Port name (e.g. SDI In 1)" style="width:45%;">
+        <select style="width:45%;">
+            <option value="">Select type</option>
             ${videoStandards.map(s => `<option value="${s.name}" ${s.name === std ? 'selected' : ''}>${s.name}</option>`).join('')}
         </select>
-        <button type="button" onclick="duplicatePort(this.parentElement, '${type}')">Duplicate</button>
+        <button onclick="this.parentElement.remove()" style="margin-left:5px;">×</button>
     `;
-    list.appendChild(div);
+    container.appendChild(row);
 }
 
-// Duplicate port with auto-incremented ID
-function duplicatePort(item, type) {
-    const nameInput = item.querySelector('.portName');
-    const typeSelect = item.querySelector('.portType');
+// Add new port button handler
+function addPortToCreator(portType) {
+    const containerId = portType === 'input' ? 'nc-inputs' : 'nc-outputs';
+    addPortRow(containerId);
+}
 
-    let name = nameInput.value.trim();
-    if (!name) {
-        alert("Fill port name first.");
+// Save node creator
+async function saveNodeCreator() {
+    // Check panel exists
+    if (!currentCreatorPanel) return;
+
+    const titleInput = document.getElementById('nc-title');
+    const categoryInput = document.getElementById('nc-device-type');
+    const manuSelect = document.getElementById('nc-manu');
+    const manuNewInput = document.getElementById('nc-manu-new');
+    const ipCheckbox = document.getElementById('nc-ipcapable');
+
+    // Bail if elements not found
+    if (!titleInput || !categoryInput || !manuSelect || !ipCheckbox) {
+        console.error("Creator panel elements not found");
         return;
     }
 
-    const idMatch = name.match(/(\d+)$/);
-    const base = name.replace(/\d+$/, '').trim();
-    const nextId = idMatch ? parseInt(idMatch[1]) + 1 : 2;
-
-    addDynamicField(type, `${base}${nextId}`, typeSelect.value);
-}
-
-// Create or edit node type
-async function createOrEditNodeType() {
-    const eqType = document.getElementById('equipmentType').value.trim();
-    let manu = document.getElementById('manufacturer').value;
-    if (manu === 'new') {
-        manu = document.getElementById('customManufacturer').value.trim();
+    let category = categoryInput.value;
+    if (category === 'new') {
+        category = document.getElementById('nc-device-new').value.trim();
     }
-    const mdl = document.getElementById('model').value.trim();
-    const ipCapable = document.getElementById('ipCapable').checked;
 
-    if (!eqType || !manu || !mdl) {
-        alert("Equipment Type, Manufacturer, and Model are required.");
+    let manufacturer = manuSelect.value;
+    if (manufacturer === 'new') {
+        manufacturer = manuNewInput.value.trim();
+    }
+
+    const title = titleInput.value.trim();
+    const ipCapable = ipCheckbox.checked;
+
+    if (!title || !category || !manufacturer) {
+        alert("Title, Device Type, and Manufacturer are required.");
         return;
     }
 
-    const title = `${eqType} - ${manu} ${mdl}`;
-    const key = `equipment/${title.replace(/\s+/g, '_')}`;
+    const name = `${category} - ${manufacturer} ${title}`;
+    const key = `equipment/${name.replace(/\s+/g, '_')}`;
 
+    // Collect inputs
     const inputs = [];
-    document.querySelectorAll('#inputsList .dynamic-item').forEach(div => {
-        const name = div.querySelector('.portName').value.trim();
-        const typ = div.querySelector('.portType').value;
-        if (name && typ) inputs.push([`${name} ${typ}`, typ]);
+    document.querySelectorAll('#nc-inputs > div').forEach(row => {
+        const portNameInput = row.querySelector('input');
+        const portTypeSelect = row.querySelector('select');
+        const portName = portNameInput.value.trim();
+        const portType = portTypeSelect.value;
+        if (portName && portType) inputs.push([`${portName} ${portType}`, portType]);
     });
 
+    // Collect outputs
     const outputs = [];
-    document.querySelectorAll('#outputsList .dynamic-item').forEach(div => {
-        const name = div.querySelector('.portName').value.trim();
-        const typ = div.querySelector('.portType').value;
-        if (name && typ) outputs.push([`${name} ${typ}`, typ]);
+    document.querySelectorAll('#nc-outputs > div').forEach(row => {
+        const portNameInput = row.querySelector('input');
+        const portTypeSelect = row.querySelector('select');
+        const portName = portNameInput.value.trim();
+        const portType = portTypeSelect.value;
+        if (portName && portType) outputs.push([`${portName} ${portType}`, portType]);
     });
 
+    // Define node class
     function CustomEquipment() {
         inputs.forEach(([n, t]) => this.addInput(n, t));
         outputs.forEach(([n, t]) => this.addOutput(n, t));
         this.properties = {
-            equipmentType: eqType,
-            manufacturer: manu,
-            model: mdl,
+            equipmentType: category,
+            manufacturer,
+            model: title,
             ipCapable,
             deviceId: '',
             ipAddress: ''
         };
     }
-    CustomEquipment.title = title;
-    CustomEquipment.prototype.onDrawBackground = function (ctx) { };
+    CustomEquipment.title = name;
+    CustomEquipment.prototype.onDrawBackground = function(ctx) { /* optional */ };
 
+    // If editing, unregister old
     if (editingType && LiteGraph.registered_node_types[editingType]) {
         LiteGraph.unregisterNodeType(editingType);
     }
 
     LiteGraph.registerNodeType(key, CustomEquipment);
 
-    // Persist to database
+    // Save to DB
     const specObj = {
-        title,
+        title: name,
         inputs,
         outputs,
-        properties: { equipmentType: eqType, manufacturer: manu, model: mdl, ipCapable }
+        properties: {
+            equipmentType: category,
+            manufacturer,
+            model: title,
+            ipCapable
+        }
     };
-    await fetch('/api/add_node_type', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: `key=${encodeURIComponent(key)}&spec=${encodeURIComponent(JSON.stringify(specObj))}`
-    });
 
-    updateSidebar();
-    closeWizard();
-    alert(`Node type "${title}" ${editingType ? 'updated' : 'created'} successfully.`);
+    try {
+        const response = await fetch('/api/add_node_type', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: `key=${encodeURIComponent(key)}&spec=${encodeURIComponent(JSON.stringify(specObj))}`
+        });
+        if (!response.ok) {
+            throw new Error('Server error: ' + response.status);
+        }
+        updateSidebar();
+        closeNodeCreator();
+        alert(`Node type "${name}" ${editingType ? 'updated' : 'created'} successfully!`);
+    } catch (e) {
+        console.error('Save failed:', e);
+        alert('Failed to save node type: ' + e.message);
+    }
 }
 
-// Create instance with incremental ID
-function addNodeInstance(typeKey, x, y) {
-    const node = LiteGraph.createNode(typeKey);
+// Add instance with count
+function addNodeInstance(key, x, y) {
+    const node = LiteGraph.createNode(key);
     if (!node) return;
 
-    const base = node.title.replace(/\s+\d+$/, '');
-    const sameType = graph._nodes.filter(n => n.title.startsWith(base));
-    const nextId = sameType.length + 1;
-
-    node.title = base + (nextId > 1 ? ' ' + nextId : '');
+    const baseTitle = node.title.replace(/\ \d+$/, '');
+    const sameType = graph._nodes.filter(n => n.type === key);
+    const count = sameType.length + 1;
+    node.title = baseTitle + ' ' + count;
     node.pos = [x, y];
     graph.add(node);
 }
 
-// Instance edit modal
+// Open instance edit
 function openInstanceEdit(node) {
     instanceNode = node;
     document.getElementById('instanceEditModal').style.display = 'block';
     document.getElementById('deviceId').value = node.properties.deviceId || '';
-    const ip = document.getElementById('ipAddress');
-    ip.value = node.properties.ipAddress || '';
-    ip.disabled = !node.properties.ipCapable;
+    const ipField = document.getElementById('ipAddress');
+    ipField.value = node.properties.ipAddress || '';
+    ipField.disabled = !node.properties.ipCapable;
 }
 
 function closeInstanceEdit() {
@@ -479,44 +561,47 @@ function saveInstanceEdit() {
     }
 }
 
-// Generate report
+// Generate Report
 function generateReport() {
     const data = graph.serialize();
     const reportDiv = document.getElementById('report');
     reportDiv.innerHTML = '';
     reportDiv.style.display = 'block';
 
-    // Inventory summary
-    const counts = {};
-    data.nodes.forEach(n => {
-        const key = `${n.properties.equipmentType} - ${n.properties.manufacturer} ${n.properties.model}`;
-        counts[key] = (counts[key] || 0) + 1;
+    const inventory = {};
+    data.nodes.forEach(node => {
+        const key = `${node.properties.equipmentType} - ${node.properties.manufacturer} ${node.properties.model}`;
+        inventory[key] = (inventory[key] || 0) + 1;
     });
 
-    let invHtml = '<h2>Inventory</h2><table border="1"><tr><th>Type</th><th>Manufacturer</th><th>Model</th><th>Count</th></tr>';
-    Object.entries(counts).forEach(([key, cnt]) => {
-        const [type, rest] = key.split(' - ');
-        const [manu, model] = rest.split(' ');
-        invHtml += `<tr><td>${type}</td><td>${manu}</td><td>${model}</td><td>${cnt}</td></tr>`;
-    });
-    invHtml += '</table>';
-
-    // Connections
-    let connHtml = '<h2>Connections</h2><table border="1"><tr><th>From</th><th>Output</th><th>To</th><th>Input</th></tr>';
-    data.links.forEach(link => {
-        const [, fromId, fromSlot, toId, toSlot] = link;
-        const from = data.nodes.find(n => n.id === fromId);
-        const to = data.nodes.find(n => n.id === toId);
-        const fromLabel = `${from.properties.manufacturer} - ${from.properties.model} - ID ${fromId}`;
-        const toLabel = `${to.properties.manufacturer} - ${to.properties.model} - ID ${toId}`;
-        connHtml += `<tr>
-            <td>${fromLabel}</td>
-            <td>${from.outputs[fromSlot]?.name || '?'}</td>
-            <td>${toLabel}</td>
-            <td>${to.inputs[toSlot]?.name || '?'}</td>
+    let inventoryHtml = '<h2>Inventory List</h2><table border="1"><tr><th>Type</th><th>Manufacturer</th><th>Model</th><th>Count</th></tr>';
+    Object.keys(inventory).forEach(key => {
+        const [type, manuModel] = key.split(' - ');
+        const [manu, model] = manuModel.split(' ');
+        inventoryHtml += `<tr>
+            <td>${type}</td>
+            <td>${manu}</td>
+            <td>${model}</td>
+            <td>${inventory[key]}</td>
         </tr>`;
     });
-    connHtml += '</table>';
+    inventoryHtml += '</table>';
 
-    reportDiv.innerHTML = invHtml + connHtml;
+    let connectionsHtml = '<h2>Input/Output Connections</h2><table border="1"><tr><th>From Equipment (ID)</th><th>Output Port</th><th>To Equipment (ID)</th><th>Input Port</th></tr>';
+    data.links.forEach(link => {
+        const [, fromId, fromSlot, toId, toSlot] = link;
+        const fromNode = data.nodes.find(n => n.id === fromId);
+        const toNode = data.nodes.find(n => n.id === toId);
+        const outputName = fromNode.outputs[fromSlot].name;
+        const inputName = toNode.inputs[toSlot].name;
+        connectionsHtml += `<tr>
+            <td>${fromId} (${fromNode.title})</td>
+            <td>${outputName}</td>
+            <td>${toId} (${toNode.title}</td>
+            <td>${inputName}</td>
+        </tr>`;
+    });
+    connectionsHtml += '</table>';
+
+    reportDiv.innerHTML = inventoryHtml + connectionsHtml;
 }
